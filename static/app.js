@@ -13,6 +13,11 @@ const importantCount = document.querySelector("#importantCount");
 const recurringCount = document.querySelector("#recurringCount");
 const pendingCount = document.querySelector("#pendingCount");
 const pendingBadge = document.querySelector("#pendingBadge");
+const setupStatus = document.querySelector("#setupStatus");
+const phoneUrl = document.querySelector("#phoneUrl");
+const webhookUrl = document.querySelector("#webhookUrl");
+const calendarUrl = document.querySelector("#calendarUrl");
+const copyButtons = document.querySelectorAll("[data-copy-target]");
 
 let activeFilter = "scheduled";
 let remindersCache = [];
@@ -291,6 +296,20 @@ async function loadPendingCandidates() {
   }
 }
 
+async function loadSetup() {
+  try {
+    const response = await fetch("/api/setup");
+    if (!response.ok) throw new Error(`HTTP ${response.status}`);
+    const setup = await response.json();
+    phoneUrl.textContent = setup.phone_url;
+    webhookUrl.textContent = setup.webhook_url;
+    calendarUrl.textContent = setup.calendar_url;
+    setupStatus.textContent = "ready";
+  } catch (error) {
+    setupStatus.textContent = "offline";
+  }
+}
+
 function sourceName(value) {
   if (value === "iphone_shortcut") return "From iPhone";
   if (value === "file") return "From file";
@@ -313,6 +332,23 @@ filterButtons.forEach((button) => {
   });
 });
 
+copyButtons.forEach((button) => {
+  button.addEventListener("click", async () => {
+    const target = document.querySelector(`#${button.dataset.copyTarget}`);
+    const value = target?.textContent || "";
+    if (!value || value === "Detecting...") return;
+    try {
+      await navigator.clipboard.writeText(value);
+      button.textContent = "Copied";
+      window.setTimeout(() => {
+        button.textContent = "Copy";
+      }, 1400);
+    } catch (error) {
+      button.textContent = "Select";
+    }
+  });
+});
+
 analyzeBtn.addEventListener("click", analyze);
 fileInput.addEventListener("change", async (event) => {
   const file = event.target.files?.[0];
@@ -326,3 +362,4 @@ if ("serviceWorker" in navigator) {
 
 loadReminders();
 loadPendingCandidates();
+loadSetup();

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import re
+import socket
 import sqlite3
 import urllib.error
 import urllib.request
@@ -10,7 +11,7 @@ from pathlib import Path
 from typing import Any, Literal
 from uuid import uuid4
 
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, Response
 from fastapi.staticfiles import StaticFiles
@@ -94,6 +95,10 @@ def ensure_columns(conn: sqlite3.Connection) -> None:
         "recurrence_day_of_week": "INTEGER",
         "recurrence_month": "INTEGER",
         "lead_minutes": "INTEGER NOT NULL DEFAULT 0",
+        "calendar_provider": "TEXT NOT NULL DEFAULT 'ics'",
+        "calendar_event_id": "TEXT",
+        "calendar_synced_at": "TEXT",
+        "calendar_sync_status": "TEXT NOT NULL DEFAULT 'not_synced'",
         "updated_at": "TEXT",
     }
     for name, definition in columns.items():
@@ -123,6 +128,10 @@ def init_db() -> None:
                 recurrence_day_of_week INTEGER,
                 recurrence_month INTEGER,
                 lead_minutes INTEGER NOT NULL DEFAULT 0,
+                calendar_provider TEXT NOT NULL DEFAULT 'ics',
+                calendar_event_id TEXT,
+                calendar_synced_at TEXT,
+                calendar_sync_status TEXT NOT NULL DEFAULT 'not_synced',
                 status TEXT NOT NULL DEFAULT 'scheduled',
                 created_at TEXT NOT NULL,
                 updated_at TEXT
@@ -714,6 +723,36 @@ def save_pending_candidates(candidates: list[dict[str, Any]], source_text: str, 
     return saved
 
 
+def detect_lan_ip() -> str | None:
+    try:
+        with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as sock:
+            sock.connect(("8.8.8.8", 80))
+            return sock.getsockname()[0]
+    except OSError:
+        try:
+            host = socket.gethostname()
+            ip = socket.gethostbyname(host)
+            if not ip.startswith("127."):
+                return ip
+        except OSError:
+            return None
+    return None
+
+
+def setup_urls(request: Request) -> dict[str, str]:
+    request_host = request.headers.get("host", "127.0.0.1:8001")
+    port = request_host.rsplit(":", 1)[1] if ":" in request_host else "8001"
+    lan_ip = detect_lan_ip()
+    laptop_origin = f"{request.url.scheme}://{request_host}"
+    phone_origin = f"http://{lan_ip}:{port}" if lan_ip else laptop_origin
+    return {
+        "laptop_url": laptop_origin,
+        "phone_url": phone_origin,
+        "webhook_url": f"{phone_origin}/api/webhook/capture",
+        "calendar_url": f"{phone_origin}/api/calendar.ics",
+    }
+
+
 @app.on_event("startup")
 def on_startup() -> None:
     init_db()
@@ -727,6 +766,20 @@ def index() -> FileResponse:
 @app.get("/manifest.webmanifest")
 def manifest() -> FileResponse:
     return FileResponse(BASE_DIR / "static" / "manifest.webmanifest")
+
+
+@app.get("/api/setup")
+def setup(request: Request) -> dict[str, Any]:
+    urls = setup_urls(request)
+    return {
+        **urls,
+        "shortcut_body": {
+            "text": "Shortcut Input",
+            "source_type": "iphone_shortcut",
+        },
+        "calendar_provider": "ics",
+        "calendar_sync_status": "ready_for_feed",
+    }
 
 
 @app.post("/api/analyze")

@@ -17,6 +17,7 @@ The MVP is designed around a confirmation loop: SignalOS extracts structured can
 - Timeline filters for active, recurring, completed, and all reminders
 - Calendar export at `/api/calendar.ics`
 - PWA manifest and service-worker shell
+- In-app phone, webhook, and calendar setup panel
 
 ## Run
 
@@ -69,7 +70,7 @@ This is the first bridge toward phone notifications because iPhone, Google Calen
 
 ## iPhone Shortcut Webhook
 
-SignalOS can receive shared text from an iPhone Shortcut and queue extracted candidates for confirmation in the app.
+SignalOS can receive shared text from an iPhone Shortcut and queue extracted candidates for confirmation in the app. Open the app and use the "Sync setup" panel to copy the current phone URL, webhook URL, and calendar feed URL.
 
 Endpoint:
 
@@ -87,6 +88,17 @@ JSON body:
 ```
 
 The webhook does not auto-save reminders. It adds pending confirmation cards to the SignalOS UI.
+
+## Sync Model
+
+For the MVP, the laptop runs the SignalOS server and owns the central SQLite database. Laptop browser, phone browser, and iPhone Shortcuts all talk to that same server, so confirmed reminders land in one shared local database.
+
+The current calendar bridge is an `.ics` feed. The reminder table already includes calendar sync metadata fields for the next Google Calendar API step:
+
+- `calendar_provider`
+- `calendar_event_id`
+- `calendar_synced_at`
+- `calendar_sync_status`
 
 ## Next Work
 
