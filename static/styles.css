@@ -448,6 +448,53 @@ select {
   backdrop-filter: blur(22px);
 }
 
+.report-panel {
+  margin-top: 18px;
+  padding: clamp(16px, 2vw, 22px);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 8px;
+  background:
+    linear-gradient(135deg, rgba(167, 103, 255, 0.08), rgba(255, 255, 255, 0.025)),
+    rgba(12, 8, 19, 0.62);
+  box-shadow: 0 20px 58px rgba(0, 0, 0, 0.22);
+  backdrop-filter: blur(22px);
+}
+
+.report-head {
+  align-items: flex-start;
+}
+
+.report-grid {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.report-grid article {
+  min-height: 104px;
+  display: grid;
+  align-content: center;
+  gap: 8px;
+  padding: 14px;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 8px;
+  background:
+    linear-gradient(145deg, rgba(255, 255, 255, 0.055), rgba(255, 255, 255, 0.018)),
+    rgba(8, 5, 15, 0.52);
+}
+
+.report-grid span {
+  color: var(--muted);
+  font-size: 0.8rem;
+  font-weight: 760;
+}
+
+.report-grid strong {
+  color: var(--ink);
+  font-size: clamp(1.45rem, 3vw, 2.2rem);
+  line-height: 1;
+}
+
 .setup-head {
   align-items: flex-start;
 }
@@ -599,11 +646,19 @@ select {
     linear-gradient(145deg, rgba(255, 255, 255, 0.055), rgba(255, 255, 255, 0.02)),
     rgba(12, 8, 20, 0.75);
   transition: transform 160ms ease, border-color 160ms ease;
+  cursor: pointer;
 }
 
-.reminder:hover {
+.reminder:hover,
+.reminder:focus-visible,
+.reminder.expanded {
   transform: translateY(-1px);
   border-color: rgba(255, 255, 255, 0.16);
+}
+
+.reminder:focus-visible {
+  outline: 2px solid rgba(92, 225, 220, 0.36);
+  outline-offset: 2px;
 }
 
 .reminder.high {
@@ -629,6 +684,30 @@ select {
   font-size: 1.02rem;
 }
 
+.reminder-description {
+  max-width: 760px;
+  max-height: 2.95em;
+  margin: 9px 0 0;
+  overflow: hidden;
+  color: var(--quiet);
+  font-size: 0.86rem;
+  line-height: 1.45;
+  transition: max-height 180ms ease, color 160ms ease;
+}
+
+.reminder-description::before {
+  content: "Why: ";
+  color: var(--accent);
+  font-weight: 850;
+}
+
+.reminder:hover .reminder-description,
+.reminder:focus-visible .reminder-description,
+.reminder.expanded .reminder-description {
+  max-height: 16em;
+  color: var(--muted);
+}
+
 .reminder-row,
 .reminder-actions {
   flex-wrap: wrap;
@@ -648,7 +727,8 @@ select {
   .workspace,
   .edit-grid,
   .overview-grid,
-  .setup-grid {
+  .setup-grid,
+  .report-grid {
     grid-template-columns: 1fr;
   }
 

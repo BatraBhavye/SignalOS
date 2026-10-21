@@ -18,6 +18,11 @@ const phoneUrl = document.querySelector("#phoneUrl");
 const webhookUrl = document.querySelector("#webhookUrl");
 const calendarUrl = document.querySelector("#calendarUrl");
 const copyButtons = document.querySelectorAll("[data-copy-target]");
+const reportWeek = document.querySelector("#reportWeek");
+const completedWeek = document.querySelector("#completedWeek");
+const pendingWeek = document.querySelector("#pendingWeek");
+const overdueWeek = document.querySelector("#overdueWeek");
+const completionRate = document.querySelector("#completionRate");
 
 let activeFilter = "scheduled";
 let remindersCache = [];
@@ -59,6 +64,13 @@ function fromDateTimeLocal(value) {
   return date.toISOString();
 }
 
+function shiftDueDate(value, days) {
+  const base = value ? new Date(value) : new Date();
+  if (Number.isNaN(base.getTime())) return null;
+  base.setDate(base.getDate() + days);
+  return base.toISOString();
+}
+
 function recurrenceLabel(recurrence = {}) {
   if (!recurrence || recurrence.kind === "none") return "One-time";
   if (recurrence.kind === "monthly" && recurrence.day_of_month) {
@@ -68,6 +80,19 @@ function recurrenceLabel(recurrence = {}) {
   if (recurrence.kind === "daily") return "Daily";
   if (recurrence.kind === "yearly") return "Yearly";
   return recurrence.kind;
+}
+
+function compactSource(value) {
+  const text = String(value || "").replace(/\s+/g, " ").trim();
+  if (!text) return "";
+  return text.length > 190 ? `${text.slice(0, 187).trim()}...` : text;
+}
+
+function reminderDescription(reminder) {
+  const reason = reminder.source_reason || "SignalOS saved this after detecting action, date, or recurrence signals.";
+  const source = compactSource(reminder.source_text);
+  if (!source) return reason;
+  return `${reason} Source: ${source}`;
 }
 
 function setEmpty(message) {
@@ -253,37 +278,64 @@ function renderReminders() {
         </div>
         <h3>${escapeHtml(reminder.title)}</h3>
         <p class="meta">${formatDate(reminder.due_at)} | ${escapeHtml(reminder.status)}</p>
-        <p class="source">${escapeHtml(reminder.source_text || "")}</p>
+        <p class="reminder-description">${escapeHtml(reminderDescription(reminder))}</p>
       </div>
       <div class="reminder-actions">
         <button class="complete secondary" type="button">${reminder.status === "completed" ? "Reopen" : "Done"}</button>
+        <button class="postpone-tomorrow secondary" type="button">Tomorrow</button>
+        <button class="postpone-week secondary" type="button">Next week</button>
         <button class="delete danger" type="button">Delete</button>
       </div>
     `;
+    card.tabIndex = 0;
+    card.title = "Click to expand details";
+    card.addEventListener("click", (event) => {
+      if (event.target.closest("button")) return;
+      card.classList.toggle("expanded");
+    });
     card.querySelector(".complete").addEventListener("click", async () => {
-      await updateStatus(reminder.id, reminder.status === "completed" ? "scheduled" : "completed");
+      await updateReminder(reminder.id, { status: reminder.status === "completed" ? "scheduled" : "completed" });
+    });
+    card.querySelector(".postpone-tomorrow").addEventListener("click", async () => {
+      await updateReminder(reminder.id, { due_at: shiftDueDate(reminder.due_at, 1), status: "scheduled" });
+    });
+    card.querySelector(".postpone-week").addEventListener("click", async () => {
+      await updateReminder(reminder.id, { due_at: shiftDueDate(reminder.due_at, 7), status: "scheduled" });
     });
     card.querySelector(".delete").addEventListener("click", async () => {
       await fetch(`/api/reminders/${reminder.id}`, { method: "DELETE" });
       await loadReminders();
+      await loadWeeklyReport();
     });
     reminderList.appendChild(card);
   }
 }
 
-async function updateStatus(id, status) {
+async function updateReminder(id, patch) {
   await fetch(`/api/reminders/${id}`, {
     method: "PATCH",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ status })
+    body: JSON.stringify(patch)
   });
   await loadReminders();
+  await loadWeeklyReport();
 }
 
 async function loadReminders() {
   const response = await fetch("/api/reminders");
   remindersCache = await response.json();
   renderReminders();
+}
+
+async function loadWeeklyReport() {
+  const response = await fetch("/api/report/weekly");
+  if (!response.ok) return;
+  const report = await response.json();
+  reportWeek.textContent = "this week";
+  completedWeek.textContent = report.completed_this_week;
+  pendingWeek.textContent = report.pending;
+  overdueWeek.textContent = report.overdue;
+  completionRate.textContent = `${report.completion_rate}%`;
 }
 
 async function loadPendingCandidates() {
@@ -363,3 +415,4 @@ if ("serviceWorker" in navigator) {
 loadReminders();
 loadPendingCandidates();
 loadSetup();
+loadWeeklyReport();

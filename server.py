@@ -65,10 +65,14 @@ class ReminderIn(BaseModel):
     source_reason: str = ""
     recurrence: Recurrence = Field(default_factory=Recurrence)
     lead_minutes: int = Field(default=0, ge=0)
+    progress_percent: int = Field(default=0, ge=0, le=100)
 
 
 class ReminderPatch(BaseModel):
     status: Status | None = None
+    due_at: str | None = None
+    priority: Priority | None = None
+    progress_percent: int | None = Field(default=None, ge=0, le=100)
 
 
 class WebhookCapture(BaseModel):
@@ -95,6 +99,10 @@ def ensure_columns(conn: sqlite3.Connection) -> None:
         "recurrence_day_of_week": "INTEGER",
         "recurrence_month": "INTEGER",
         "lead_minutes": "INTEGER NOT NULL DEFAULT 0",
+        "progress_percent": "INTEGER NOT NULL DEFAULT 0",
+        "completed_at": "TEXT",
+        "postponed_count": "INTEGER NOT NULL DEFAULT 0",
+        "last_postponed_at": "TEXT",
         "calendar_provider": "TEXT NOT NULL DEFAULT 'ics'",
         "calendar_event_id": "TEXT",
         "calendar_synced_at": "TEXT",
@@ -128,6 +136,10 @@ def init_db() -> None:
                 recurrence_day_of_week INTEGER,
                 recurrence_month INTEGER,
                 lead_minutes INTEGER NOT NULL DEFAULT 0,
+                progress_percent INTEGER NOT NULL DEFAULT 0,
+                completed_at TEXT,
+                postponed_count INTEGER NOT NULL DEFAULT 0,
+                last_postponed_at TEXT,
                 calendar_provider TEXT NOT NULL DEFAULT 'ics',
                 calendar_event_id TEXT,
                 calendar_synced_at TEXT,
@@ -161,45 +173,235 @@ def parse_now(raw_now: str | None) -> datetime:
         return datetime.now()
 
 
-def normalize_text(text: str) -> str:
+TEXT_REPLACEMENTS = {
+    r"\bcll\b": "call",
+    r"\bpls\b": "please",
+    r"\bplz\b": "please",
+    r"\btmrw\b": "tomorrow",
+    r"\btom\b": "tomorrow",
+    r"\btdy\b": "today",
+    r"\bmsg\b": "message",
+    r"\bassgn\b": "assignment",
+    r"\bsub\b": "submit",
+    r"\beod\b": "end of day",
+    r"\bth\b": "the",
+    r"\baaj\b": "today",
+    r"\bkal\b": "tomorrow",
+    r"\bparso\b": "day after tomorrow",
+    r"\bpadhai\b": "study",
+    r"\bpadhna\b": "study",
+    r"\bpadna\b": "study",
+    r"\bpadho\b": "study",
+    r"\bexam dena\b": "give exam",
+    r"\bpaper dena\b": "give exam",
+    r"\bjana\b": "go",
+    r"\bjaana\b": "go",
+    r"\bzaroori\b": "important",
+    r"\bjaruri\b": "important",
+    r"\bbahut important\b": "most important",
+    r"\bbohot important\b": "most important",
+}
+
+
+def apply_text_replacements(text: str) -> str:
     cleaned = text.strip()
-    replacements = {
-        r"\bcll\b": "call",
-        r"\bpls\b": "please",
-        r"\bplz\b": "please",
-        r"\btmrw\b": "tomorrow",
-        r"\btom\b": "tomorrow",
-        r"\btdy\b": "today",
-        r"\bmsg\b": "message",
-        r"\bassgn\b": "assignment",
-        r"\bsub\b": "submit",
-        r"\beod\b": "end of day",
-        r"\bth\b": "the",
-    }
-    for pattern, repl in replacements.items():
+    for pattern, repl in TEXT_REPLACEMENTS.items():
         cleaned = re.sub(pattern, repl, cleaned, flags=re.IGNORECASE)
+    return cleaned
+
+
+def normalize_text(text: str) -> str:
+    cleaned = apply_text_replacements(text)
     cleaned = re.sub(r"\s+", " ", cleaned)
     return cleaned
 
 
-def infer_type(text: str) -> ReminderType:
+def split_action_chunks(text: str) -> list[str]:
+    cleaned = apply_text_replacements(text)
+    cleaned = re.sub(r"\r\n?", "\n", cleaned)
+    lines = [
+        re.sub(r"\s+", " ", line).strip(" -\t")
+        for line in cleaned.split("\n")
+        if re.sub(r"\s+", " ", line).strip(" -\t")
+    ]
+    if len(lines) >= 2:
+        return lines
+    normalized = normalize_text(cleaned)
+    return [
+        chunk.strip()
+        for chunk in re.split(r"[;]+|(?:\s+\balso\s+)|(?:\s+\band\s+)", normalized, flags=re.IGNORECASE)
+        if chunk.strip()
+    ]
+
+
+def matching_score(text: str, patterns: list[tuple[str, int]]) -> int:
+    return sum(weight for pattern, weight in patterns if re.search(pattern, text, re.IGNORECASE))
+
+
+def clean_title_fragment(value: str) -> str:
+    cleaned = re.sub(r"\s+", " ", value)
+    cleaned = re.sub(r"\((?:most\s+)?(?:important|urgent|asap|critical)[^)]*\)", "", cleaned, flags=re.IGNORECASE)
+    cleaned = re.sub(r"\b(?:karna|karni|krna)\s+hai\b", "", cleaned, flags=re.IGNORECASE)
+    cleaned = re.sub(r"\b(?:by|before|on|at)\s+(?:today|tomorrow|tonight|kal|aaj)\b.*$", "", cleaned, flags=re.IGNORECASE)
+    cleaned = re.sub(r"\b(?:on|at|by|before)\s+\d{1,2}[/-]\d{1,2}(?:[/-]\d{2,4})?\b.*$", "", cleaned, flags=re.IGNORECASE)
+    cleaned = re.sub(r"\b(?:on|at|by|before)\s+\d{1,2}(?:st|nd|rd|th)?\s+[a-z]{3,9}\b.*$", "", cleaned, flags=re.IGNORECASE)
+    cleaned = re.sub(r"\b(?:at|by|before)\s+\d{1,2}(?::\d{2})?\s*(?:am|pm|a\.m\.|p\.m\.)\b.*$", "", cleaned, flags=re.IGNORECASE)
+    cleaned = re.sub(r"\b(?:pnr|seat(?:\s+no)?|address|boarding|invoice|order|booking)\s*[:#-].*$", "", cleaned, flags=re.IGNORECASE)
+    cleaned = cleaned.strip(" .,!?:;-")
+    return cleaned
+
+
+def title_case_place(value: str) -> str:
+    cleaned = clean_title_fragment(value)
+    cleaned = re.sub(r"\([^)]*\)", "", cleaned)
+    cleaned = cleaned.strip(" .,!?:;-")
+    return " ".join(part.capitalize() for part in cleaned.split())
+
+
+def extract_route_title(text: str) -> str | None:
+    route_match = re.search(
+        r"\bfrom\s*:?\s*([a-z][a-z\s.'()-]{1,45}?)\s+to\s*:?\s*([a-z][a-z\s.'()-]{1,45}?)(?:\s+on\b|,|\n|$)",
+        text,
+        re.IGNORECASE,
+    )
+    if not route_match:
+        return None
+    origin = title_case_place(route_match.group(1))
+    destination = title_case_place(route_match.group(2))
+    if not origin or not destination:
+        return None
+    vehicle = "Travel"
+    if re.search(r"\bbus\b", text, re.IGNORECASE):
+        vehicle = "Bus"
+    elif re.search(r"\b(train|railway)\b", text, re.IGNORECASE):
+        vehicle = "Train"
+    elif re.search(r"\b(flight|airline|airport)\b", text, re.IGNORECASE):
+        vehicle = "Flight"
+    return f"{vehicle} journey: {origin} to {destination}"
+
+
+def extract_payment_title(text: str) -> str | None:
+    lower = text.lower()
+    bill_terms = [
+        ("tuition fees", r"\b(tuition|school|college|semester)\b.*\bfees?\b|\bfees?\b.*\b(tuition|school|college|semester)\b"),
+        ("fees", r"\bfees?\b"),
+        ("electricity bill", r"\belectricity\b|\bpower bill\b"),
+        ("phone bill", r"\b(phone|mobile|postpaid)\b.*\bbill\b"),
+        ("rent", r"\brent\b"),
+        ("invoice", r"\binvoice\b"),
+        ("bill", r"\bbill\b"),
+    ]
+    for label, pattern in bill_terms:
+        if re.search(pattern, lower):
+            return f"Pay {label}"
+    if re.search(r"\b(pay|payment|amount due|due amount)\b", lower):
+        return "Make payment"
+    return None
+
+
+def first_meaningful_fragment(text: str) -> str:
+    fragments = [
+        clean_title_fragment(fragment)
+        for fragment in re.split(r"[\n.;,]+", text)
+        if clean_title_fragment(fragment)
+    ]
+    ignored = re.compile(r"^(dear|hello|hi|thanks|thank you|regards|address|seat|pnr)\b", re.IGNORECASE)
+    for fragment in fragments:
+        if not ignored.search(fragment) and len(fragment.split()) >= 2:
+            return fragment
+    return fragments[0] if fragments else ""
+
+
+def classify_intent(text: str) -> dict[str, Any]:
+    lower = text.lower()
+    profiles = [
+        {
+            "key": "travel",
+            "reminder_type": "event",
+            "patterns": [
+                (r"\bpnr\b", 3),
+                (r"\bseat\s*(?:no|number)?\b", 2),
+                (r"\bboarding\b", 2),
+                (r"\bfrom\s*:?.{1,60}\bto\s*:?", 3),
+                (r"\b(bus|train|flight|journey|ticket|passenger|booking)\b", 2),
+            ],
+            "reason": "Detected a scheduled booking from route, boarding, seat, or ticket details.",
+        },
+        {
+            "key": "payment",
+            "reminder_type": "task",
+            "patterns": [
+                (r"\b(pay|payment|amount due|due amount)\b", 3),
+                (r"\b(fee|fees|bill|invoice|rent|emi)\b", 2),
+                (r"\b(last date|due date|pay before|before end of day)\b", 2),
+            ],
+            "reason": "Detected a payment task from bill, fee, invoice, or due-date language.",
+        },
+        {
+            "key": "deadline",
+            "reminder_type": "task",
+            "patterns": [
+                (r"\b(deadline|last date|due|submit|submission)\b", 3),
+                (r"\b(assignment|form|report|project|application|exam|paper|study)\b", 2),
+            ],
+            "reason": "Detected a task deadline from due-date or submission language.",
+        },
+        {
+            "key": "personal_task",
+            "reminder_type": "task",
+            "patterns": [
+                (r"\b(study|revise|prepare|give exam|exam|paper)\b", 3),
+                (r"\b(call|message|text|go|visit|dentist|doctor)\b", 3),
+            ],
+            "reason": "Detected a personal action item from task-style language.",
+        },
+        {
+            "key": "appointment",
+            "reminder_type": "event",
+            "patterns": [
+                (r"\b(meeting|appointment|interview|session|webinar|class|event)\b", 3),
+                (r"\b(venue|location|join|attend|scheduled)\b", 1),
+            ],
+            "reason": "Detected a scheduled event from appointment or meeting language.",
+        },
+    ]
+    best = {"key": "", "reminder_type": infer_type_basic(text), "score": 0, "reason": ""}
+    for profile in profiles:
+        score = matching_score(lower, profile["patterns"])
+        if score > best["score"]:
+            best = {
+                "key": profile["key"],
+                "reminder_type": profile["reminder_type"],
+                "score": score,
+                "reason": profile["reason"],
+            }
+    if best["score"] < 3:
+        best["key"] = ""
+        best["reminder_type"] = infer_type_basic(text)
+        best["reason"] = ""
+    return best
+
+
+def infer_type_basic(text: str) -> ReminderType:
     lower = text.lower()
     if re.search(r"\b(anniversary|birthday|bday|birth day)\b", lower):
         return "important_date"
     if re.search(r"\b(meeting|class|appointment|interview|session|event|webinar)\b", lower):
         return "event"
-    if re.search(r"\b(submit|finish|complete|send|pay|fill|upload|apply|book)\b", lower):
+    if re.search(r"\b(submit|finish|complete|send|pay|fill|upload|apply|book|study|revise|prepare|exam|paper)\b", lower):
         return "task"
-    if re.search(r"\b(call|message|text|remind|ping|wake|gym|chalna|jana|go|visit)\b", lower):
+    if re.search(r"\b(call|message|text|remind|ping|wake|gym|chalna|jana|jaana|go|visit|dentist|doctor)\b", lower):
         return "reminder"
     return "note"
 
 
+def infer_type(text: str) -> ReminderType:
+    return classify_intent(text)["reminder_type"]
+
+
 def priority(text: str, due_at: datetime | None, now: datetime) -> Priority:
     lower = text.lower()
-    if re.search(r"\b(urgent|asap|immediately|last date|deadline|important|critical)\b", lower):
-        return "high"
-    if due_at and due_at <= now + timedelta(hours=6):
+    if re.search(r"\b(urgent|asap|immediately|last date|deadline|important|most important|critical)\b", lower):
         return "high"
     if due_at and due_at <= now + timedelta(days=2):
         return "medium"
@@ -422,8 +624,28 @@ def polish_title(title: str) -> str:
 
 def title_from_text(text: str, reminder_type: ReminderType) -> str:
     lower = text.lower()
-    if re.search(r"\bpay\b", lower) and re.search(r"\b(fee|fees)\b", lower):
-        return "Pay fees"
+    intent = classify_intent(text)
+    if intent["key"] == "travel":
+        route_title = extract_route_title(text)
+        if route_title:
+            return route_title
+        if re.search(r"\bbus\b", lower):
+            return "Bus journey"
+        if re.search(r"\btrain|railway\b", lower):
+            return "Train journey"
+        if re.search(r"\bflight|airline|airport\b", lower):
+            return "Flight booking"
+        return "Travel booking"
+    if intent["key"] == "payment":
+        payment_title = extract_payment_title(text)
+        if payment_title:
+            return payment_title
+    if intent["key"] == "deadline":
+        subject_match = re.search(r"\b(?:submit|submission|deadline|due)\s+(?:for\s+)?(.+)", text, flags=re.IGNORECASE)
+        if subject_match:
+            subject = clean_title_fragment(subject_match.group(1))
+            if subject:
+                return polish_title(f"Submit {subject}" if "submit" not in subject.lower() else subject)
     if reminder_type == "important_date":
         if "anniversary" in lower:
             return "Anniversary"
@@ -435,11 +657,11 @@ def title_from_text(text: str, reminder_type: ReminderType) -> str:
         r"\bdon'?t forget to\s+(.+)",
         r"\bneed to\s+(.+)",
         r"\bhave to\s+(.+)",
-        r"\b(call|message|text|submit|finish|complete|send|pay|fill|upload|apply|book)\s+(.+)",
+        r"\b(call|message|text|submit|finish|complete|send|pay|fill|upload|apply|book|study|revise|prepare|give|go|visit)\s+(.+)",
     ]
     title = text
     for pattern in patterns:
-        match = re.search(pattern, lower, flags=re.IGNORECASE)
+        match = re.search(pattern, text, flags=re.IGNORECASE)
         if match:
             if len(match.groups()) == 2:
                 title = f"{match.group(1)} {match.group(2)}"
@@ -455,7 +677,12 @@ def title_from_text(text: str, reminder_type: ReminderType) -> str:
         title,
         flags=re.IGNORECASE,
     )
+    title = clean_title_fragment(title)
     title = re.sub(r"\s+", " ", title).strip(" .,!?:;")
+    if len(title.split()) > 9 or len(title) > 70:
+        title = first_meaningful_fragment(text)
+    if len(title) > 70:
+        title = title[:67].rstrip(" .,!?:;-") + "..."
     if not title:
         title = "Review captured note" if reminder_type == "note" else "New reminder"
     return polish_title(title)
@@ -481,15 +708,22 @@ def due_to_wire(due: datetime | None) -> str | None:
 
 def rule_extract(text: str, now: datetime, source_type: str = "text") -> list[dict[str, Any]]:
     normalized = normalize_text(text)
-    chunks = [chunk.strip() for chunk in re.split(r"[\n;]+|(?:\s+\band\s+)", normalized) if chunk.strip()]
+    document_intent = classify_intent(normalized)
+    if document_intent["score"] >= 5 and document_intent["key"] == "travel":
+        chunks = [normalized]
+    else:
+        chunks = split_action_chunks(text)
     candidates = []
     for chunk in chunks:
-        reminder_type = infer_type(chunk)
+        intent = classify_intent(chunk)
+        reminder_type = intent["reminder_type"]
         recurrence = parse_recurrence(chunk, now)
         date_base = parse_date(chunk, now)
         due = parse_time(chunk, date_base, now) or next_recurrence_due(recurrence, now)
         has_action = reminder_type != "note" or due is not None or re.search(
-            r"\b(deadline|last date|due|remind|task|important)\b", chunk, re.IGNORECASE
+            r"\b(deadline|last date|due|remind|task|important|pnr|boarding|invoice|booking)\b",
+            chunk,
+            re.IGNORECASE,
         )
         if not has_action:
             continue
@@ -505,9 +739,11 @@ def rule_extract(text: str, now: datetime, source_type: str = "text") -> list[di
             confidence += 0.14
         if reminder_type != "note":
             confidence += 0.1
+        if intent["score"] >= 5:
+            confidence += 0.08
         if len(chunk.split()) <= 12:
             confidence += 0.04
-        reason = recurrence_reason(recurrence) or "Detected action and time signals with the rules engine."
+        reason = recurrence_reason(recurrence) or intent["reason"] or "Detected action and time signals with the rules engine."
         candidates.append(
             {
                 "id": str(uuid4()),
@@ -539,6 +775,11 @@ Return compact JSON only:
 Allowed reminder_type: reminder, task, event, important_date, note.
 Allowed recurrence kind: none, daily, weekly, monthly, yearly.
 For "16th of every month", use recurrence.kind "monthly" and day_of_month 16.
+Support Hinglish and casual shorthand, for example "kal", "aaj", "padhna", "exam dena", and "jana".
+If one message contains multiple lines or multiple action clauses, return one item per action.
+Treat "important", "most important", "urgent", "zaroori", and "jaruri" as high priority signals.
+When text looks like a document, receipt, ticket, bill, booking, or screenshot OCR, infer the user's motive.
+Use concise titles such as "Bus journey: Delhi to Jaipur", "Pay fees", or "Submit assignment"; never use the full source text as the title.
 """
     payload = json.dumps(
         {
@@ -624,15 +865,18 @@ def merge_ollama_with_rules(ollama_items: list[dict[str, Any]], rule_items: list
             combined["title"] = polish_title(rule_title)
         if rule_item.get("due_at"):
             combined["due_at"] = rule_item["due_at"]
-        if item.get("reminder_type") == "reminder" and rule_item.get("reminder_type") in {"task", "event", "important_date"}:
+        if rule_item.get("reminder_type") in {"task", "event", "important_date", "reminder", "note"}:
             combined["reminder_type"] = rule_item["reminder_type"]
-        if rule_item.get("priority") == "high":
-            combined["priority"] = "high"
+        if rule_item.get("priority"):
+            combined["priority"] = rule_item["priority"]
         recurrence = item.get("recurrence") or {}
         if recurrence.get("kind") in {None, "none"} and rule_item.get("recurrence", {}).get("kind") != "none":
             combined["recurrence"] = rule_item["recurrence"]
         combined["extractor"] = "ollama+rules"
-        combined["source_reason"] = item.get("source_reason") or rule_item.get("source_reason", "")
+        if item.get("source_reason") and item.get("source_reason") != "Ollama detected action intent.":
+            combined["source_reason"] = item["source_reason"]
+        else:
+            combined["source_reason"] = rule_item.get("source_reason", "")
         merged.append(combined)
 
     for index, rule_item in enumerate(rule_items):
@@ -690,6 +934,15 @@ def ics_datetime(value: str | None) -> str:
     except ValueError:
         parsed = datetime.now() + timedelta(hours=1)
     return parsed.strftime("%Y%m%dT%H%M%S")
+
+
+def parse_stored_datetime(value: str | None) -> datetime | None:
+    if not value:
+        return None
+    try:
+        return datetime.fromisoformat(value.replace("Z", "+00:00")).replace(tzinfo=None)
+    except ValueError:
+        return None
 
 
 def extract_candidates(text: str, now: datetime, source_type: str, use_ollama: bool = True) -> tuple[list[dict[str, Any]], str | None]:
@@ -786,7 +1039,7 @@ def setup(request: Request) -> dict[str, Any]:
 def analyze(payload: AnalyzeRequest) -> dict[str, Any]:
     now = parse_now(payload.now)
     normalized = normalize_text(payload.text)
-    candidates, ollama_error = extract_candidates(normalized, now, payload.source_type, payload.use_ollama)
+    candidates, ollama_error = extract_candidates(payload.text, now, payload.source_type, payload.use_ollama)
     extractor = candidates[0].get("extractor", "rules") if candidates else "rules"
     return {
         "normalized_text": normalized,
@@ -808,9 +1061,9 @@ def create_reminder(payload: ReminderIn) -> dict[str, Any]:
                 id, title, reminder_type, due_at, priority, confidence, source_text,
                 source_type, extractor, source_reason, recurrence_kind, recurrence_interval,
                 recurrence_day_of_month, recurrence_day_of_week, recurrence_month,
-                lead_minutes, status, created_at, updated_at
+                lead_minutes, progress_percent, status, created_at, updated_at
             )
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'scheduled', ?, ?)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'scheduled', ?, ?)
             """,
             (
                 reminder_id,
@@ -829,6 +1082,7 @@ def create_reminder(payload: ReminderIn) -> dict[str, Any]:
                 payload.recurrence.day_of_week,
                 payload.recurrence.month,
                 payload.lead_minutes,
+                payload.progress_percent,
                 created_at,
                 created_at,
             ),
@@ -840,7 +1094,7 @@ def create_reminder(payload: ReminderIn) -> dict[str, Any]:
 def webhook_capture(payload: WebhookCapture) -> dict[str, Any]:
     now = parse_now(payload.now)
     normalized = normalize_text(payload.text)
-    candidates, ollama_error = extract_candidates(normalized, now, payload.source_type, True)
+    candidates, ollama_error = extract_candidates(payload.text, now, payload.source_type, True)
     pending = save_pending_candidates(candidates, normalized, payload.source_type)
     return {
         "status": "queued",
@@ -883,16 +1137,50 @@ def list_reminders() -> list[dict[str, Any]]:
 
 @app.patch("/api/reminders/{reminder_id}")
 def update_reminder(reminder_id: str, payload: ReminderPatch) -> dict[str, Any]:
-    if payload.status is None:
+    updates = payload.model_dump(exclude_unset=True)
+    if not updates:
         raise HTTPException(status_code=400, detail="No update provided")
     updated_at = datetime.now().isoformat(timespec="seconds") + IST_OFFSET
     with db() as conn:
-        result = conn.execute(
-            "UPDATE reminders SET status = ?, updated_at = ? WHERE id = ?",
-            (payload.status, updated_at, reminder_id),
-        )
-        if result.rowcount == 0:
+        current = conn.execute("SELECT * FROM reminders WHERE id = ?", (reminder_id,)).fetchone()
+        if current is None:
             raise HTTPException(status_code=404, detail="Reminder not found")
+        set_parts = ["updated_at = ?"]
+        values: list[Any] = [updated_at]
+
+        if "status" in updates and payload.status is not None:
+            set_parts.append("status = ?")
+            values.append(payload.status)
+            if payload.status == "completed":
+                set_parts.append("completed_at = ?")
+                values.append(updated_at)
+                set_parts.append("progress_percent = ?")
+                values.append(100)
+            elif payload.status == "scheduled":
+                set_parts.append("completed_at = ?")
+                values.append(None)
+
+        if "due_at" in updates:
+            set_parts.append("due_at = ?")
+            values.append(payload.due_at)
+            if payload.due_at and payload.due_at != current["due_at"]:
+                set_parts.append("postponed_count = postponed_count + 1")
+                set_parts.append("last_postponed_at = ?")
+                values.append(updated_at)
+
+        if "priority" in updates and payload.priority is not None:
+            set_parts.append("priority = ?")
+            values.append(payload.priority)
+
+        if "progress_percent" in updates and payload.progress_percent is not None:
+            set_parts.append("progress_percent = ?")
+            values.append(payload.progress_percent)
+
+        values.append(reminder_id)
+        conn.execute(
+            f"UPDATE reminders SET {', '.join(set_parts)} WHERE id = ?",
+            values,
+        )
         row = conn.execute("SELECT * FROM reminders WHERE id = ?", (reminder_id,)).fetchone()
     return reminder_from_row(row)
 
@@ -904,6 +1192,36 @@ def delete_reminder(reminder_id: str) -> dict[str, str]:
     if result.rowcount == 0:
         raise HTTPException(status_code=404, detail="Reminder not found")
     return {"status": "deleted"}
+
+
+@app.get("/api/report/weekly")
+def weekly_report() -> dict[str, Any]:
+    reminders = list_reminders()
+    now = datetime.now()
+    start = (now - timedelta(days=now.weekday())).replace(hour=0, minute=0, second=0, microsecond=0)
+    scheduled = [item for item in reminders if item.get("status") == "scheduled"]
+    completed = [item for item in reminders if item.get("status") == "completed"]
+    completed_this_week = [
+        item for item in completed
+        if (completed_at := parse_stored_datetime(item.get("completed_at"))) and completed_at >= start
+    ]
+    overdue = [
+        item for item in scheduled
+        if (due_at := parse_stored_datetime(item.get("due_at"))) and due_at < now
+    ]
+    active_tasks = [item for item in scheduled if item.get("reminder_type") == "task"]
+    progress_values = [int(item.get("progress_percent") or 0) for item in active_tasks]
+    average_progress = round(sum(progress_values) / len(progress_values)) if progress_values else 0
+    denominator = len(completed_this_week) + len(scheduled)
+    completion_rate = round((len(completed_this_week) / denominator) * 100) if denominator else 0
+    return {
+        "week_start": start.isoformat(timespec="seconds") + IST_OFFSET,
+        "completed_this_week": len(completed_this_week),
+        "pending": len(scheduled),
+        "overdue": len(overdue),
+        "completion_rate": completion_rate,
+        "average_progress": average_progress,
+    }
 
 
 @app.get("/api/calendar.ics")

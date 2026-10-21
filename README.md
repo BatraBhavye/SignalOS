@@ -9,12 +9,17 @@ The MVP is designed around a confirmation loop: SignalOS extracts structured can
 - Dark, mobile-first web app UI
 - Text capture and text-file import
 - Deterministic NLP extraction for reliable fallback
+- Multiple action extraction from one prompt
+- Hinglish and casual shorthand support with Ollama fallback
 - Automatic hybrid extraction with Ollama when `llama3.1:8b` is available locally
 - Editable confirmation cards before saving
 - Reminder, task, event, note, and important-date types
 - Monthly, weekly, daily, and yearly recurrence metadata
 - SQLite storage
 - Timeline filters for active, recurring, completed, and all reminders
+- Deterministic intent descriptions on saved reminders
+- Postpone actions for rescheduling tasks and reminders
+- Weekly report for completed, pending, overdue, and completion rate
 - Calendar export at `/api/calendar.ics`
 - PWA manifest and service-worker shell
 - In-app phone, webhook, and calendar setup panel
@@ -48,6 +53,7 @@ http://YOUR-LAPTOP-IP:8000
 - `fees last date is 20 Oct, pay before end of day`
 - `kal 8 baje gym chalna and remind me to upload assignment tonight`
 - `Meeting with project team tomorrow at 6:30 pm`
+- `10 am study for exam\n2 pm give exam\n7pm call gf (MOST IMPORTANT)\nalso remind me to go to the dentist`
 
 ## Local AI
 
@@ -107,3 +113,5 @@ The current calendar bridge is an `.ics` feed. The reminder table already includ
 - Add PWA push notifications for installed iPhone/desktop app mode
 - Add extraction tests and benchmark examples
 - Add a proper settings screen for default reminder time and notification method
+- Bring back progress bars when moving beyond the presentation MVP
+- Add subtasks for multi-step work
