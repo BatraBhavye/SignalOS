@@ -1,0 +1,11 @@
+{
+  "name": "SignalOS",
+  "short_name": "SignalOS",
+  "description": "Local-first action inbox for reminders, tasks, events, and important dates.",
+  "start_url": "/",
+  "scope": "/",
+  "display": "standalone",
+  "background_color": "#09070f",
+  "theme_color": "#13091f",
+  "icons": []
+}

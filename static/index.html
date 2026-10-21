@@ -3,93 +3,165 @@
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>SignalOS MVP</title>
+    <meta name="theme-color" content="#13091f" />
+    <title>SignalOS</title>
+    <link rel="manifest" href="/manifest.webmanifest" />
     <link rel="stylesheet" href="/static/styles.css" />
   </head>
   <body>
-    <main class="shell">
-      <section class="topbar">
-        <div>
-          <p class="eyebrow">Local-first NLP assistant</p>
-          <h1>SignalOS</h1>
-          <p class="subhead">Turn messy messages into confirmed reminders, tasks, and events.</p>
-        </div>
-        <div class="status">
-          <span class="dot"></span>
-          MVP Ready
-        </div>
-      </section>
-
-      <section class="grid">
-        <section class="panel capture">
-          <div class="panel-title">
-            <h2>Capture</h2>
-            <button id="demoBtn" class="ghost" type="button">Demo</button>
+    <main class="app-shell">
+      <header class="topbar">
+        <div class="brand-lockup">
+          <div class="mark">S</div>
+          <div>
+            <p class="eyebrow">Local-first action inbox</p>
+            <h1>SignalOS</h1>
+            <p class="tagline">Capture, confirm, and calendar your real-life commitments.</p>
           </div>
-          <textarea id="inputText" spellcheck="false" placeholder="Paste a message, note, WhatsApp text, or OCR output..."></textarea>
-          <div class="controls">
-            <label class="toggle">
-              <input id="ollamaToggle" type="checkbox" />
-              <span>Try Ollama first</span>
+        </div>
+        <div class="top-actions">
+          <a class="icon-link" href="/api/calendar.ics" title="Export calendar">Calendar</a>
+          <span class="system-pill"><span></span> Phone inbox ready</span>
+        </div>
+      </header>
+
+      <section class="workspace">
+        <section class="capture-surface">
+          <div class="section-head">
+            <div>
+              <p class="eyebrow">Capture</p>
+              <h2>Turn messy input into confirmed action.</h2>
+            </div>
+          </div>
+
+          <textarea id="inputText" spellcheck="false" placeholder="Paste a message, college notice, instruction, OCR text, or something like: my anniversary is on the 16th of every month"></textarea>
+
+          <div class="input-tools">
+            <label class="file-button">
+              <input id="fileInput" type="file" accept=".txt,.csv,.md,.json" />
+              Import text file
             </label>
             <button id="analyzeBtn" type="button">Analyze</button>
           </div>
-          <div class="file-row">
-            <input id="fileInput" type="file" accept=".txt,.csv,.md,.json" />
-            <p>Text files work now. Screenshot OCR is next-module scope.</p>
-          </div>
-          <div id="normalized" class="normalized hidden"></div>
+
+          <div id="normalized" class="insight hidden"></div>
         </section>
 
-        <section class="panel">
-          <div class="panel-title">
-            <h2>Confirm</h2>
-            <span id="extractorBadge" class="badge">waiting</span>
+        <section class="review-surface">
+          <div class="section-head">
+            <div>
+              <p class="eyebrow">Confirm</p>
+              <h2>Review before SignalOS saves anything.</h2>
+            </div>
+            <span id="pendingBadge" class="system-pill subtle-pill">0 pending</span>
           </div>
-          <div id="candidateList" class="empty">
-            Add a message and run analysis. Suggested actions will appear here for confirmation.
+          <div id="candidateList" class="empty-state">
+            Your confirmation inbox is clear.
           </div>
         </section>
       </section>
 
-      <section class="panel dashboard">
-        <div class="panel-title">
-          <h2>Action Timeline</h2>
-          <button id="refreshBtn" class="ghost" type="button">Refresh</button>
-        </div>
-        <div id="reminderList" class="reminder-list"></div>
+      <section class="overview-grid" aria-label="Reminder overview">
+        <article class="metric-card">
+          <p>Next</p>
+          <h3 id="nextDueTitle">No upcoming item</h3>
+          <span id="nextDueTime">Add a reminder to begin</span>
+        </article>
+        <article class="metric-card">
+          <p>Inbox</p>
+          <h3 id="pendingCount">0</h3>
+          <span>waiting for confirmation</span>
+        </article>
+        <article class="metric-card">
+          <p>Today</p>
+          <h3 id="todayCount">0</h3>
+          <span>scheduled actions</span>
+        </article>
+        <article class="metric-card">
+          <p>Important dates</p>
+          <h3 id="importantCount">0</h3>
+          <span>birthdays, anniversaries, deadlines</span>
+        </article>
+        <article class="metric-card">
+          <p>Recurring</p>
+          <h3 id="recurringCount">0</h3>
+          <span>habits and repeated dates</span>
+        </article>
       </section>
 
-      <section class="panel notes">
-        <h2>Presentation Talking Points</h2>
-        <div class="talking-grid">
-          <article>
-            <h3>NLP Pipeline</h3>
-            <p>Normalization, intent classification, temporal parsing, action extraction, priority scoring, JSON validation, and human confirmation.</p>
-          </article>
-          <article>
-            <h3>Local AI Ready</h3>
-            <p>The backend can call Ollama when available, then falls back to deterministic extraction for reliable demos.</p>
-          </article>
-          <article>
-            <h3>Product Direction</h3>
-            <p>Starts with reminders from daily messages, then expands into study, diet, finance, safety, and personal planning modules.</p>
-          </article>
+      <section class="timeline-panel">
+        <div class="section-head timeline-head">
+          <div>
+            <p class="eyebrow">Timeline</p>
+            <h2>Confirmed reminders and important dates.</h2>
+          </div>
+          <div class="timeline-actions">
+            <div class="segment" role="tablist" aria-label="Reminder filters">
+              <button class="active" type="button" data-filter="scheduled">Active</button>
+              <button type="button" data-filter="important">Important</button>
+              <button type="button" data-filter="recurring">Recurring</button>
+              <button type="button" data-filter="completed">Done</button>
+              <button type="button" data-filter="all">All</button>
+            </div>
+          </div>
         </div>
+        <div id="reminderList" class="timeline-list"></div>
       </section>
     </main>
 
     <template id="candidateTemplate">
       <article class="candidate">
-        <div>
-          <p class="type"></p>
-          <h3></h3>
-          <p class="meta"></p>
-          <p class="source"></p>
+        <div class="candidate-top">
+          <span class="chip type-chip"></span>
+          <span class="chip confidence-chip"></span>
         </div>
+        <div class="edit-grid">
+          <label>
+            Title
+            <input class="edit-title" type="text" />
+          </label>
+          <label>
+            Type
+            <select class="edit-type">
+              <option value="reminder">Reminder</option>
+              <option value="task">Task</option>
+              <option value="event">Event</option>
+              <option value="important_date">Important date</option>
+              <option value="note">Note</option>
+            </select>
+          </label>
+          <label>
+            Due date and time
+            <input class="edit-due" type="datetime-local" />
+          </label>
+          <label>
+            Priority
+            <select class="edit-priority">
+              <option value="low">Low</option>
+              <option value="medium">Medium</option>
+              <option value="high">High</option>
+            </select>
+          </label>
+          <label>
+            Repeat
+            <select class="edit-recurrence">
+              <option value="none">Does not repeat</option>
+              <option value="daily">Daily</option>
+              <option value="weekly">Weekly</option>
+              <option value="monthly">Monthly</option>
+              <option value="yearly">Yearly</option>
+            </select>
+          </label>
+          <label>
+            Day of month
+            <input class="edit-day" type="number" min="1" max="31" />
+          </label>
+        </div>
+        <p class="reason"></p>
+        <p class="source"></p>
         <div class="candidate-actions">
           <button class="confirm" type="button">Confirm</button>
-          <button class="reject" type="button">Reject</button>
+          <button class="reject secondary" type="button">Reject</button>
         </div>
       </article>
     </template>
