@@ -304,10 +304,38 @@ def matching_score(text: str, patterns: list[tuple[str, int]]) -> int:
     return sum(weight for pattern, weight in patterns if re.search(pattern, text, re.IGNORECASE))
 
 
+def duration_value(raw_value: str) -> int | None:
+    words = {
+        "a": 1,
+        "an": 1,
+        "one": 1,
+        "two": 2,
+        "three": 3,
+        "four": 4,
+        "five": 5,
+        "six": 6,
+        "seven": 7,
+        "eight": 8,
+        "nine": 9,
+        "ten": 10,
+    }
+    if raw_value.isdigit():
+        return int(raw_value)
+    return words.get(raw_value.lower())
+
+
 def clean_title_fragment(value: str) -> str:
     cleaned = re.sub(r"\s+", " ", value)
     cleaned = re.sub(r"\((?:most\s+)?(?:important|urgent|asap|critical)[^)]*\)", "", cleaned, flags=re.IGNORECASE)
     cleaned = re.sub(r"\b(?:karna|karni|krna)\s+hai\b", "", cleaned, flags=re.IGNORECASE)
+    cleaned = re.sub(
+        r"\b(?:in|after)\s+(?:a|an|one|two|three|four|five|six|seven|eight|nine|ten|\d+)\s+"
+        r"(?:minutes?|mins?|hours?|hrs?)\b.*$",
+        "",
+        cleaned,
+        flags=re.IGNORECASE,
+    )
+    cleaned = re.sub(r"\b(?:in|after)\s+half\s+(?:an?\s+)?hour\b.*$", "", cleaned, flags=re.IGNORECASE)
     cleaned = re.sub(r"\b(?:by|before|on|at)\s+(?:today|tomorrow|tonight|kal|aaj)\b.*$", "", cleaned, flags=re.IGNORECASE)
     cleaned = re.sub(r"\b(?:on|at|by|before)\s+\d{1,2}[/-]\d{1,2}(?:[/-]\d{2,4})?\b.*$", "", cleaned, flags=re.IGNORECASE)
     cleaned = re.sub(r"\b(?:on|at|by|before)\s+\d{1,2}(?:st|nd|rd|th)?\s+[a-z]{3,9}\b.*$", "", cleaned, flags=re.IGNORECASE)
@@ -635,6 +663,22 @@ def next_recurrence_due(recurrence: Recurrence, now: datetime) -> datetime | Non
 
 def parse_time(text: str, date_base: datetime, now: datetime) -> datetime | None:
     lower = text.lower()
+    half_hour_match = re.search(r"\b(?:in|after)\s+half\s+(?:an?\s+)?hour\b", lower)
+    if half_hour_match:
+        return (now + timedelta(minutes=30)).replace(second=0, microsecond=0)
+
+    relative_match = re.search(
+        r"\b(?:in|after)\s+(a|an|one|two|three|four|five|six|seven|eight|nine|ten|\d+)\s+"
+        r"(minutes?|mins?|hours?|hrs?)\b",
+        lower,
+    )
+    if relative_match:
+        amount = duration_value(relative_match.group(1))
+        unit = relative_match.group(2)
+        if amount is not None:
+            delta = timedelta(hours=amount) if unit.startswith(("hour", "hr")) else timedelta(minutes=amount)
+            return (now + delta).replace(second=0, microsecond=0)
+
     time_match = re.search(r"\b(?:at\s*)?(\d{1,2})(?::(\d{2}))?\s*(am|pm|a\.m\.|p\.m\.)\b", lower)
     if time_match:
         hour = int(time_match.group(1))

@@ -133,7 +133,7 @@ async function analyze() {
     const data = await response.json();
     if (data.ollama_error) {
       normalized.classList.remove("hidden");
-      normalized.textContent = "Local AI was unavailable, so SignalOS used the deterministic parser.";
+      normalized.textContent = "AI extraction was unavailable here, so SignalOS used the deterministic parser.";
     } else {
       normalized.classList.add("hidden");
       normalized.textContent = "";
