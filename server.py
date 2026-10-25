@@ -1,8 +1,12 @@
 from __future__ import annotations
 
+import base64
+import hashlib
+import hmac
 import json
 import os
 import re
+import secrets
 import socket
 import sqlite3
 import urllib.error
@@ -30,6 +34,10 @@ BASE_DIR = Path(__file__).resolve().parent
 DB_PATH = BASE_DIR / "data" / "signalos.db"
 DATABASE_URL = os.getenv("DATABASE_URL", "")
 IST_OFFSET = "+05:30"
+SESSION_COOKIE = "signalos_session"
+SESSION_SECRET = os.getenv("SESSION_SECRET", "signalos-dev-session-secret-change-me")
+MAX_USERS = int(os.getenv("MAX_USERS", "0") or "0")
+ALLOW_SIGNUPS = os.getenv("ALLOW_SIGNUPS", "true").lower() not in {"0", "false", "no"}
 
 ReminderType = Literal["reminder", "task", "event", "important_date", "note"]
 Priority = Literal["low", "medium", "high"]
@@ -88,6 +96,11 @@ class WebhookCapture(BaseModel):
     text: str = Field(..., min_length=1)
     source_type: str = "iphone_shortcut"
     now: str | None = None
+
+
+class AuthRequest(BaseModel):
+    username: str = Field(..., min_length=2, max_length=80)
+    password: str = Field(..., min_length=8, max_length=200)
 
 
 def use_postgres() -> bool:
@@ -154,6 +167,119 @@ def table_columns(conn: Database, table: str) -> set[str]:
     return sqlite_table_columns(conn, table)
 
 
+def generate_token() -> str:
+    return secrets.token_urlsafe(32)
+
+
+def normalize_username(username: str) -> str:
+    return username.strip().lower()
+
+
+def password_hash(password: str, salt: str | None = None) -> str:
+    salt = salt or secrets.token_hex(16)
+    digest = hashlib.pbkdf2_hmac("sha256", password.encode("utf-8"), salt.encode("utf-8"), 150_000)
+    return f"pbkdf2_sha256${salt}${digest.hex()}"
+
+
+def verify_password(password: str, stored_hash: str) -> bool:
+    try:
+        algorithm, salt, expected = stored_hash.split("$", 2)
+    except ValueError:
+        return False
+    if algorithm != "pbkdf2_sha256":
+        return False
+    return hmac.compare_digest(password_hash(password, salt), stored_hash)
+
+
+def sign_session(user_id: str) -> str:
+    payload = base64.urlsafe_b64encode(user_id.encode("utf-8")).decode("ascii")
+    signature = hmac.new(SESSION_SECRET.encode("utf-8"), payload.encode("ascii"), hashlib.sha256).hexdigest()
+    return f"{payload}.{signature}"
+
+
+def verify_session(value: str | None) -> str | None:
+    if not value or "." not in value:
+        return None
+    payload, signature = value.rsplit(".", 1)
+    expected = hmac.new(SESSION_SECRET.encode("utf-8"), payload.encode("ascii"), hashlib.sha256).hexdigest()
+    if not hmac.compare_digest(signature, expected):
+        return None
+    try:
+        return base64.urlsafe_b64decode(payload.encode("ascii")).decode("utf-8")
+    except ValueError:
+        return None
+
+
+def public_user(row: Any) -> dict[str, Any]:
+    return {"id": row["id"], "username": row["username"], "created_at": row["created_at"]}
+
+
+def get_user_by_id(user_id: str) -> dict[str, Any] | None:
+    with db() as conn:
+        row = conn.execute("SELECT * FROM users WHERE id = ?", (user_id,)).fetchone()
+    return dict(row) if row else None
+
+
+def get_user_by_api_token(token: str | None) -> dict[str, Any] | None:
+    if not token:
+        return None
+    with db() as conn:
+        row = conn.execute("SELECT * FROM users WHERE api_token = ?", (token,)).fetchone()
+    return dict(row) if row else None
+
+
+def get_current_user(request: Request) -> dict[str, Any]:
+    user_id = verify_session(request.cookies.get(SESSION_COOKIE))
+    if not user_id:
+        raise HTTPException(status_code=401, detail="Not authenticated")
+    user = get_user_by_id(user_id)
+    if not user:
+        raise HTTPException(status_code=401, detail="Not authenticated")
+    return user
+
+
+def get_current_user_or_token(request: Request) -> dict[str, Any]:
+    token = request.query_params.get("token") or request.headers.get("X-SignalOS-Token")
+    user = get_user_by_api_token(token)
+    if user:
+        return user
+    return get_current_user(request)
+
+
+def set_session_cookie(response: Response, user_id: str) -> None:
+    response.set_cookie(
+        SESSION_COOKIE,
+        sign_session(user_id),
+        httponly=True,
+        secure=use_postgres(),
+        samesite="lax",
+        max_age=60 * 60 * 24 * 30,
+    )
+
+
+def clear_session_cookie(response: Response) -> None:
+    response.delete_cookie(SESSION_COOKIE, httponly=True, secure=use_postgres(), samesite="lax")
+
+
+def user_count(conn: Database) -> int:
+    row = conn.execute("SELECT COUNT(*) AS count FROM users").fetchone()
+    return int(row["count"])
+
+
+def claim_unowned_data(conn: Database, user_id: str) -> None:
+    conn.execute("UPDATE reminders SET user_id = ? WHERE user_id IS NULL", (user_id,))
+    conn.execute("UPDATE pending_candidates SET user_id = ? WHERE user_id IS NULL", (user_id,))
+
+
+def ensure_user_columns(conn: Database) -> None:
+    existing = table_columns(conn, "users")
+    if "api_token" not in existing:
+        conn.execute("ALTER TABLE users ADD COLUMN api_token TEXT")
+    rows = conn.execute("SELECT id FROM users WHERE api_token IS NULL OR api_token = ''").fetchall()
+    for row in rows:
+        conn.execute("UPDATE users SET api_token = ? WHERE id = ?", (generate_token(), row["id"]))
+
+
 def ensure_columns(conn: Database) -> None:
     existing = table_columns(conn, "reminders")
     columns = {
@@ -175,6 +301,7 @@ def ensure_columns(conn: Database) -> None:
         "calendar_synced_at": "TEXT",
         "calendar_sync_status": "TEXT NOT NULL DEFAULT 'not_synced'",
         "updated_at": "TEXT",
+        "user_id": "TEXT",
     }
     for name, definition in columns.items():
         if name not in existing:
@@ -183,6 +310,17 @@ def ensure_columns(conn: Database) -> None:
 
 def init_db() -> None:
     with db() as conn:
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS users (
+                id TEXT PRIMARY KEY,
+                username TEXT NOT NULL UNIQUE,
+                password_hash TEXT NOT NULL,
+                api_token TEXT,
+                created_at TEXT NOT NULL
+            )
+            """
+        )
         conn.execute(
             """
             CREATE TABLE IF NOT EXISTS reminders (
@@ -211,6 +349,7 @@ def init_db() -> None:
                 calendar_synced_at TEXT,
                 calendar_sync_status TEXT NOT NULL DEFAULT 'not_synced',
                 status TEXT NOT NULL DEFAULT 'scheduled',
+                user_id TEXT,
                 created_at TEXT NOT NULL,
                 updated_at TEXT
             )
@@ -223,11 +362,16 @@ def init_db() -> None:
                 candidate_json TEXT NOT NULL,
                 source_text TEXT NOT NULL,
                 source_type TEXT NOT NULL,
+                user_id TEXT,
                 created_at TEXT NOT NULL
             )
             """
         )
+        ensure_user_columns(conn)
         ensure_columns(conn)
+        existing_pending = table_columns(conn, "pending_candidates")
+        if "user_id" not in existing_pending:
+            conn.execute("ALTER TABLE pending_candidates ADD COLUMN user_id TEXT")
 
 
 def parse_now(raw_now: str | None) -> datetime:
@@ -1068,7 +1212,7 @@ def extract_candidates(text: str, now: datetime, source_type: str, use_ollama: b
         return rule_candidates, str(exc)
 
 
-def save_pending_candidates(candidates: list[dict[str, Any]], source_text: str, source_type: str) -> list[dict[str, Any]]:
+def save_pending_candidates(candidates: list[dict[str, Any]], source_text: str, source_type: str, user_id: str) -> list[dict[str, Any]]:
     created_at = datetime.now().isoformat(timespec="seconds") + IST_OFFSET
     saved = []
     with db() as conn:
@@ -1077,10 +1221,10 @@ def save_pending_candidates(candidates: list[dict[str, Any]], source_text: str, 
             payload = {**candidate, "pending_id": pending_id}
             conn.execute(
                 """
-                INSERT INTO pending_candidates (id, candidate_json, source_text, source_type, created_at)
-                VALUES (?, ?, ?, ?, ?)
+                INSERT INTO pending_candidates (id, candidate_json, source_text, source_type, user_id, created_at)
+                VALUES (?, ?, ?, ?, ?, ?)
                 """,
-                (pending_id, json.dumps(payload), source_text, source_type, created_at),
+                (pending_id, json.dumps(payload), source_text, source_type, user_id, created_at),
             )
             saved.append(payload)
     return saved
@@ -1134,9 +1278,72 @@ def manifest() -> FileResponse:
     return FileResponse(BASE_DIR / "static" / "manifest.webmanifest")
 
 
+@app.get("/api/auth/me")
+def auth_me(request: Request) -> dict[str, Any]:
+    user_id = verify_session(request.cookies.get(SESSION_COOKIE))
+    user = get_user_by_id(user_id) if user_id else None
+    with db() as conn:
+        count = user_count(conn)
+    return {
+        "authenticated": bool(user),
+        "user": public_user(user) if user else None,
+        "allow_signups": ALLOW_SIGNUPS and (MAX_USERS == 0 or count < MAX_USERS),
+        "max_users": MAX_USERS or None,
+        "user_count": count,
+    }
+
+
+@app.post("/api/auth/signup")
+def auth_signup(payload: AuthRequest, response: Response) -> dict[str, Any]:
+    if not ALLOW_SIGNUPS:
+        raise HTTPException(status_code=403, detail="Signups are disabled")
+    username = normalize_username(payload.username)
+    if not re.fullmatch(r"[a-z0-9_.@-]+", username):
+        raise HTTPException(status_code=400, detail="Use letters, numbers, dot, underscore, hyphen, or @")
+    user_id = str(uuid4())
+    created_at = datetime.now().isoformat(timespec="seconds") + IST_OFFSET
+    with db() as conn:
+        count = user_count(conn)
+        if MAX_USERS and count >= MAX_USERS:
+            raise HTTPException(status_code=403, detail="User limit reached")
+        existing = conn.execute("SELECT id FROM users WHERE username = ?", (username,)).fetchone()
+        if existing:
+            raise HTTPException(status_code=409, detail="Username already exists")
+        conn.execute(
+            "INSERT INTO users (id, username, password_hash, api_token, created_at) VALUES (?, ?, ?, ?, ?)",
+            (user_id, username, password_hash(payload.password), generate_token(), created_at),
+        )
+        if count == 0:
+            claim_unowned_data(conn, user_id)
+    set_session_cookie(response, user_id)
+    return {"user": {"id": user_id, "username": username, "created_at": created_at}}
+
+
+@app.post("/api/auth/login")
+def auth_login(payload: AuthRequest, response: Response) -> dict[str, Any]:
+    username = normalize_username(payload.username)
+    with db() as conn:
+        row = conn.execute("SELECT * FROM users WHERE username = ?", (username,)).fetchone()
+    if not row or not verify_password(payload.password, row["password_hash"]):
+        raise HTTPException(status_code=401, detail="Invalid username or password")
+    set_session_cookie(response, row["id"])
+    return {"user": public_user(row)}
+
+
+@app.post("/api/auth/logout")
+def auth_logout(response: Response) -> dict[str, str]:
+    clear_session_cookie(response)
+    return {"status": "logged_out"}
+
+
 @app.get("/api/setup")
 def setup(request: Request) -> dict[str, Any]:
     urls = setup_urls(request)
+    user_id = verify_session(request.cookies.get(SESSION_COOKIE))
+    user = get_user_by_id(user_id) if user_id else None
+    if user and user.get("api_token"):
+        urls["webhook_url"] = f"{urls['phone_url']}/api/webhook/capture?token={user['api_token']}"
+        urls["calendar_url"] = f"{urls['phone_url']}/api/calendar.ics?token={user['api_token']}"
     return {
         **urls,
         "shortcut_body": {
@@ -1150,7 +1357,8 @@ def setup(request: Request) -> dict[str, Any]:
 
 
 @app.post("/api/analyze")
-def analyze(payload: AnalyzeRequest) -> dict[str, Any]:
+def analyze(payload: AnalyzeRequest, request: Request) -> dict[str, Any]:
+    get_current_user(request)
     now = parse_now(payload.now)
     normalized = normalize_text(payload.text)
     candidates, ollama_error = extract_candidates(payload.text, now, payload.source_type, payload.use_ollama)
@@ -1164,7 +1372,8 @@ def analyze(payload: AnalyzeRequest) -> dict[str, Any]:
 
 
 @app.post("/api/reminders")
-def create_reminder(payload: ReminderIn) -> dict[str, Any]:
+def create_reminder(payload: ReminderIn, request: Request) -> dict[str, Any]:
+    user = get_current_user(request)
     reminder_id = str(uuid4())
     created_at = datetime.now().isoformat(timespec="seconds") + IST_OFFSET
     with db() as conn:
@@ -1175,9 +1384,9 @@ def create_reminder(payload: ReminderIn) -> dict[str, Any]:
                 id, title, reminder_type, due_at, priority, confidence, source_text,
                 source_type, extractor, source_reason, recurrence_kind, recurrence_interval,
                 recurrence_day_of_month, recurrence_day_of_week, recurrence_month,
-                lead_minutes, progress_percent, status, created_at, updated_at
+                lead_minutes, progress_percent, status, user_id, created_at, updated_at
             )
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'scheduled', ?, ?)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'scheduled', ?, ?, ?)
             """,
             (
                 reminder_id,
@@ -1197,6 +1406,7 @@ def create_reminder(payload: ReminderIn) -> dict[str, Any]:
                 payload.recurrence.month,
                 payload.lead_minutes,
                 payload.progress_percent,
+                user["id"],
                 created_at,
                 created_at,
             ),
@@ -1205,11 +1415,12 @@ def create_reminder(payload: ReminderIn) -> dict[str, Any]:
 
 
 @app.post("/api/webhook/capture")
-def webhook_capture(payload: WebhookCapture) -> dict[str, Any]:
+def webhook_capture(payload: WebhookCapture, request: Request) -> dict[str, Any]:
+    user = get_current_user_or_token(request)
     now = parse_now(payload.now)
     normalized = normalize_text(payload.text)
     candidates, ollama_error = extract_candidates(payload.text, now, payload.source_type, True)
-    pending = save_pending_candidates(candidates, normalized, payload.source_type)
+    pending = save_pending_candidates(candidates, normalized, payload.source_type, user["id"])
     return {
         "status": "queued",
         "normalized_text": normalized,
@@ -1220,9 +1431,13 @@ def webhook_capture(payload: WebhookCapture) -> dict[str, Any]:
 
 
 @app.get("/api/pending")
-def list_pending_candidates() -> list[dict[str, Any]]:
+def list_pending_candidates(request: Request) -> list[dict[str, Any]]:
+    user = get_current_user(request)
     with db() as conn:
-        rows = conn.execute("SELECT * FROM pending_candidates ORDER BY created_at DESC").fetchall()
+        rows = conn.execute(
+            "SELECT * FROM pending_candidates WHERE user_id = ? ORDER BY created_at DESC",
+            (user["id"],),
+        ).fetchall()
     pending = []
     for row in rows:
         candidate = json.loads(row["candidate_json"])
@@ -1234,29 +1449,39 @@ def list_pending_candidates() -> list[dict[str, Any]]:
 
 
 @app.delete("/api/pending/{pending_id}")
-def delete_pending_candidate(pending_id: str) -> dict[str, str]:
+def delete_pending_candidate(pending_id: str, request: Request) -> dict[str, str]:
+    user = get_current_user(request)
     with db() as conn:
-        result = conn.execute("DELETE FROM pending_candidates WHERE id = ?", (pending_id,))
+        result = conn.execute("DELETE FROM pending_candidates WHERE id = ? AND user_id = ?", (pending_id, user["id"]))
     if result.rowcount == 0:
         raise HTTPException(status_code=404, detail="Pending candidate not found")
     return {"status": "deleted"}
 
 
 @app.get("/api/reminders")
-def list_reminders() -> list[dict[str, Any]]:
+def list_reminders(request: Request) -> list[dict[str, Any]]:
+    user = get_current_user(request)
+    return list_reminders_for_user(user["id"])
+
+
+def list_reminders_for_user(user_id: str) -> list[dict[str, Any]]:
     with db() as conn:
-        rows = conn.execute("SELECT * FROM reminders ORDER BY COALESCE(due_at, created_at)").fetchall()
+        rows = conn.execute(
+            "SELECT * FROM reminders WHERE user_id = ? ORDER BY COALESCE(due_at, created_at)",
+            (user_id,),
+        ).fetchall()
     return [reminder_from_row(row) for row in rows]
 
 
 @app.patch("/api/reminders/{reminder_id}")
-def update_reminder(reminder_id: str, payload: ReminderPatch) -> dict[str, Any]:
+def update_reminder(reminder_id: str, payload: ReminderPatch, request: Request) -> dict[str, Any]:
+    user = get_current_user(request)
     updates = payload.model_dump(exclude_unset=True)
     if not updates:
         raise HTTPException(status_code=400, detail="No update provided")
     updated_at = datetime.now().isoformat(timespec="seconds") + IST_OFFSET
     with db() as conn:
-        current = conn.execute("SELECT * FROM reminders WHERE id = ?", (reminder_id,)).fetchone()
+        current = conn.execute("SELECT * FROM reminders WHERE id = ? AND user_id = ?", (reminder_id, user["id"])).fetchone()
         if current is None:
             raise HTTPException(status_code=404, detail="Reminder not found")
         set_parts = ["updated_at = ?"]
@@ -1290,27 +1515,29 @@ def update_reminder(reminder_id: str, payload: ReminderPatch) -> dict[str, Any]:
             set_parts.append("progress_percent = ?")
             values.append(payload.progress_percent)
 
-        values.append(reminder_id)
+        values.extend([reminder_id, user["id"]])
         conn.execute(
-            f"UPDATE reminders SET {', '.join(set_parts)} WHERE id = ?",
+            f"UPDATE reminders SET {', '.join(set_parts)} WHERE id = ? AND user_id = ?",
             values,
         )
-        row = conn.execute("SELECT * FROM reminders WHERE id = ?", (reminder_id,)).fetchone()
+        row = conn.execute("SELECT * FROM reminders WHERE id = ? AND user_id = ?", (reminder_id, user["id"])).fetchone()
     return reminder_from_row(row)
 
 
 @app.delete("/api/reminders/{reminder_id}")
-def delete_reminder(reminder_id: str) -> dict[str, str]:
+def delete_reminder(reminder_id: str, request: Request) -> dict[str, str]:
+    user = get_current_user(request)
     with db() as conn:
-        result = conn.execute("DELETE FROM reminders WHERE id = ?", (reminder_id,))
+        result = conn.execute("DELETE FROM reminders WHERE id = ? AND user_id = ?", (reminder_id, user["id"]))
     if result.rowcount == 0:
         raise HTTPException(status_code=404, detail="Reminder not found")
     return {"status": "deleted"}
 
 
 @app.get("/api/report/weekly")
-def weekly_report() -> dict[str, Any]:
-    reminders = list_reminders()
+def weekly_report(request: Request) -> dict[str, Any]:
+    user = get_current_user(request)
+    reminders = list_reminders_for_user(user["id"])
     now = datetime.now()
     start = (now - timedelta(days=now.weekday())).replace(hour=0, minute=0, second=0, microsecond=0)
     scheduled = [item for item in reminders if item.get("status") == "scheduled"]
@@ -1339,8 +1566,9 @@ def weekly_report() -> dict[str, Any]:
 
 
 @app.get("/api/calendar.ics")
-def calendar_export() -> Response:
-    reminders = list_reminders()
+def calendar_export(request: Request) -> Response:
+    user = get_current_user_or_token(request)
+    reminders = list_reminders_for_user(user["id"])
     lines = [
         "BEGIN:VCALENDAR",
         "VERSION:2.0",

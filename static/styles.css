@@ -109,6 +109,59 @@ button:disabled {
   z-index: 1;
 }
 
+.auth-view {
+  min-height: 100vh;
+  display: grid;
+  place-items: center;
+  padding: 22px;
+  position: relative;
+  z-index: 1;
+}
+
+.auth-card {
+  width: min(480px, 100%);
+  display: grid;
+  gap: 22px;
+  padding: clamp(18px, 4vw, 28px);
+  border: 1px solid rgba(255, 255, 255, 0.09);
+  border-radius: 8px;
+  background:
+    linear-gradient(145deg, rgba(167, 103, 255, 0.12), rgba(255, 255, 255, 0.026) 56%, rgba(92, 225, 220, 0.06)),
+    rgba(12, 8, 19, 0.78);
+  box-shadow: var(--shadow);
+  backdrop-filter: blur(22px);
+}
+
+.auth-form {
+  display: grid;
+  gap: 13px;
+}
+
+.auth-actions {
+  display: flex;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.auth-actions button {
+  flex: 1 1 150px;
+}
+
+.auth-message {
+  min-height: 1.2em;
+  margin: 0;
+  color: var(--muted);
+  font-size: 0.86rem;
+}
+
+.auth-message.error {
+  color: var(--high);
+}
+
+.auth-message.success {
+  color: var(--accent);
+}
+
 .topbar,
 .section-head,
 .timeline-actions,
@@ -765,7 +818,8 @@ select {
   }
 
   .top-actions,
-  .timeline-actions {
+  .timeline-actions,
+  .auth-actions {
     width: 100%;
   }
 

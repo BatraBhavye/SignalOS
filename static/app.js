@@ -1,4 +1,14 @@
 const inputText = document.querySelector("#inputText");
+const authView = document.querySelector("#authView");
+const appShell = document.querySelector("#appShell");
+const authForm = document.querySelector("#authForm");
+const authUsername = document.querySelector("#authUsername");
+const authPassword = document.querySelector("#authPassword");
+const authMessage = document.querySelector("#authMessage");
+const loginBtn = document.querySelector("#loginBtn");
+const signupBtn = document.querySelector("#signupBtn");
+const logoutBtn = document.querySelector("#logoutBtn");
+const userPill = document.querySelector("#userPill");
 const analyzeBtn = document.querySelector("#analyzeBtn");
 const candidateList = document.querySelector("#candidateList");
 const reminderList = document.querySelector("#reminderList");
@@ -27,6 +37,7 @@ const completionRate = document.querySelector("#completionRate");
 let activeFilter = "scheduled";
 let remindersCache = [];
 let pendingCache = [];
+let currentUser = null;
 
 function formatDate(value) {
   if (!value) return "No deadline detected";
@@ -82,6 +93,41 @@ function recurrenceLabel(recurrence = {}) {
   return recurrence.kind;
 }
 
+function showAuth(message = "", isError = false) {
+  currentUser = null;
+  appShell.classList.add("hidden");
+  authView.classList.remove("hidden");
+  setAuthMessage(message, isError);
+}
+
+function showApp(user) {
+  currentUser = user;
+  userPill.textContent = user?.username || "signed in";
+  authView.classList.add("hidden");
+  appShell.classList.remove("hidden");
+}
+
+function setAuthMessage(message, isError = false) {
+  authMessage.textContent = message;
+  authMessage.classList.toggle("error", Boolean(message && isError));
+  authMessage.classList.toggle("success", Boolean(message && !isError));
+}
+
+async function apiFetch(url, options = {}) {
+  const response = await fetch(url, {
+    credentials: "same-origin",
+    ...options,
+    headers: {
+      ...(options.headers || {})
+    }
+  });
+  if (response.status === 401) {
+    showAuth("Please sign in to continue.", true);
+    throw new Error("Not signed in");
+  }
+  return response;
+}
+
 function compactSource(value) {
   const text = String(value || "").replace(/\s+/g, " ").trim();
   if (!text) return "";
@@ -120,7 +166,7 @@ async function analyze() {
   setBusy(true);
   setEmpty("Running extraction...");
   try {
-    const response = await fetch("/api/analyze", {
+    const response = await apiFetch("/api/analyze", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
@@ -170,7 +216,7 @@ function renderCandidates(items, emptyMessage = "No actionable reminder was dete
     node.querySelector(".confirm").addEventListener("click", () => confirmCandidate(item, node));
     node.querySelector(".reject").addEventListener("click", async () => {
       if (item.pending_id) {
-        await fetch(`/api/pending/${item.pending_id}`, { method: "DELETE" });
+        await apiFetch(`/api/pending/${item.pending_id}`, { method: "DELETE" });
         pendingCache = pendingCache.filter((pending) => pending.pending_id !== item.pending_id);
         updatePendingCount();
       }
@@ -207,7 +253,7 @@ function readCandidateFromNode(item, node) {
 
 async function confirmCandidate(item, node) {
   const payload = readCandidateFromNode(item, node);
-  const response = await fetch("/api/reminders", {
+  const response = await apiFetch("/api/reminders", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(payload)
@@ -217,7 +263,7 @@ async function confirmCandidate(item, node) {
     return;
   }
   if (item.pending_id) {
-    await fetch(`/api/pending/${item.pending_id}`, { method: "DELETE" });
+    await apiFetch(`/api/pending/${item.pending_id}`, { method: "DELETE" });
     pendingCache = pendingCache.filter((pending) => pending.pending_id !== item.pending_id);
     updatePendingCount();
   }
@@ -303,7 +349,7 @@ function renderReminders() {
       await updateReminder(reminder.id, { due_at: shiftDueDate(reminder.due_at, 7), status: "scheduled" });
     });
     card.querySelector(".delete").addEventListener("click", async () => {
-      await fetch(`/api/reminders/${reminder.id}`, { method: "DELETE" });
+      await apiFetch(`/api/reminders/${reminder.id}`, { method: "DELETE" });
       await loadReminders();
       await loadWeeklyReport();
     });
@@ -312,7 +358,7 @@ function renderReminders() {
 }
 
 async function updateReminder(id, patch) {
-  await fetch(`/api/reminders/${id}`, {
+  await apiFetch(`/api/reminders/${id}`, {
     method: "PATCH",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(patch)
@@ -322,13 +368,13 @@ async function updateReminder(id, patch) {
 }
 
 async function loadReminders() {
-  const response = await fetch("/api/reminders");
+  const response = await apiFetch("/api/reminders");
   remindersCache = await response.json();
   renderReminders();
 }
 
 async function loadWeeklyReport() {
-  const response = await fetch("/api/report/weekly");
+  const response = await apiFetch("/api/report/weekly");
   if (!response.ok) return;
   const report = await response.json();
   reportWeek.textContent = "this week";
@@ -339,7 +385,7 @@ async function loadWeeklyReport() {
 }
 
 async function loadPendingCandidates() {
-  const response = await fetch("/api/pending");
+  const response = await apiFetch("/api/pending");
   if (!response.ok) return;
   pendingCache = await response.json();
   updatePendingCount();
@@ -350,7 +396,7 @@ async function loadPendingCandidates() {
 
 async function loadSetup() {
   try {
-    const response = await fetch("/api/setup");
+    const response = await apiFetch("/api/setup");
     if (!response.ok) throw new Error(`HTTP ${response.status}`);
     const setup = await response.json();
     phoneUrl.textContent = setup.phone_url;
@@ -359,6 +405,61 @@ async function loadSetup() {
     setupStatus.textContent = "ready";
   } catch (error) {
     setupStatus.textContent = "offline";
+  }
+}
+
+async function loadAppData() {
+  await Promise.all([
+    loadReminders(),
+    loadPendingCandidates(),
+    loadSetup(),
+    loadWeeklyReport()
+  ]);
+}
+
+async function checkAuth() {
+  const response = await fetch("/api/auth/me", { credentials: "same-origin" });
+  const data = await response.json();
+  signupBtn.disabled = !data.allow_signups;
+  if (!data.allow_signups) {
+    signupBtn.title = data.max_users ? `User limit reached (${data.max_users})` : "Signups are disabled";
+  }
+  if (data.authenticated) {
+    showApp(data.user);
+    await loadAppData();
+  } else {
+    const limitText = data.max_users ? `Signup limit: ${data.user_count}/${data.max_users}.` : "";
+    showAuth(limitText, false);
+  }
+}
+
+async function submitAuth(mode) {
+  const username = authUsername.value.trim();
+  const password = authPassword.value;
+  if (!username || !password) {
+    setAuthMessage("Enter username and password.", true);
+    return;
+  }
+  setAuthMessage(mode === "signup" ? "Creating account..." : "Signing in...");
+  loginBtn.disabled = true;
+  signupBtn.disabled = true;
+  try {
+    const response = await fetch(`/api/auth/${mode}`, {
+      method: "POST",
+      credentials: "same-origin",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ username, password })
+    });
+    const data = await response.json().catch(() => ({}));
+    if (!response.ok) throw new Error(data.detail || "Authentication failed");
+    authPassword.value = "";
+    showApp(data.user);
+    await loadAppData();
+  } catch (error) {
+    setAuthMessage(error.message, true);
+  } finally {
+    loginBtn.disabled = false;
+    signupBtn.disabled = false;
   }
 }
 
@@ -402,6 +503,19 @@ copyButtons.forEach((button) => {
 });
 
 analyzeBtn.addEventListener("click", analyze);
+authForm.addEventListener("submit", (event) => {
+  event.preventDefault();
+  submitAuth("login");
+});
+signupBtn.addEventListener("click", () => submitAuth("signup"));
+logoutBtn.addEventListener("click", async () => {
+  await fetch("/api/auth/logout", { method: "POST", credentials: "same-origin" });
+  remindersCache = [];
+  pendingCache = [];
+  candidateList.innerHTML = "";
+  setEmpty("Sign in to continue.");
+  showAuth("Signed out.");
+});
 fileInput.addEventListener("change", async (event) => {
   const file = event.target.files?.[0];
   if (!file) return;
@@ -412,7 +526,4 @@ if ("serviceWorker" in navigator) {
   navigator.serviceWorker.register("/static/service-worker.js").catch(() => {});
 }
 
-loadReminders();
-loadPendingCandidates();
-loadSetup();
-loadWeeklyReport();
+checkAuth();

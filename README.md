@@ -25,6 +25,9 @@ Implemented:
 - FastAPI backend
 - Vanilla JavaScript frontend with a polished dark UI
 - SQLite persistence
+- Neon/Postgres persistence for hosted deployment
+- Username/password login with per-user data isolation
+- Configurable signup cap with `MAX_USERS`
 - Deterministic NLP extraction for reliable fallback
 - Optional local Ollama/Llama extraction and validation
 - Multi-action extraction from a single prompt
@@ -40,6 +43,7 @@ Implemented:
 - iPhone Shortcut/webhook capture path
 - Phone-accessible local web app setup panel
 - `.ics` calendar export
+- Render + Neon free long-term deployment path
 - PWA manifest and service worker shell
 
 Not yet implemented:
@@ -47,7 +51,6 @@ Not yet implemented:
 - OCR image upload for screenshots
 - Direct Google Calendar API sync
 - Push notifications
-- Hosted deployment
 - Automated regression test suite
 - Subtasks/progress workflow for larger tasks
 
@@ -79,6 +82,19 @@ The deterministic layer currently handles:
 - payment, travel, deadline, appointment, and personal-task intent scoring
 - priority detection from urgency phrases such as `urgent`, `deadline`, and `MOST IMPORTANT`
 - concise title generation from messy input
+
+## Auth And Data Isolation
+
+SignalOS uses simple first-party authentication:
+
+- username/password signup and login
+- salted PBKDF2 password hashes
+- signed HTTP-only session cookies
+- each reminder and pending candidate belongs to one user
+- optional `MAX_USERS` cap for personal deployments
+- tokenized calendar and webhook URLs generated per user in the Sync setup panel
+
+For a personal deployment, set `MAX_USERS=2` on Render to limit the instance to two accounts. The open-source default allows signups unless the deployer disables or limits them.
 
 ## Example Inputs
 
@@ -206,7 +222,9 @@ Steps:
 4. Open Render and create a new Blueprint from the SignalOS repository.
 5. Render will read `render.yaml` and create the web service.
 6. In Render, set the `DATABASE_URL` environment variable to the Neon connection string.
-7. Deploy, then open the public Render URL.
+7. Set `SESSION_SECRET` to a long random value.
+8. Optionally set `MAX_USERS=2` for a personal two-user deployment.
+9. Deploy, then open the public Render URL.
 
 Important free-tier limits:
 
@@ -214,6 +232,16 @@ Important free-tier limits:
 - Neon Free compute can suspend after inactivity, so the first database query may also have a short cold start
 - Neon Free storage persists within its free limits, but the app should still be exported/backed up if it becomes important
 - hosted deployment does not run your laptop's local Ollama instance
+- the open-source default allows signups; set `MAX_USERS` to cap accounts on your own deployment
+
+Useful environment variables:
+
+```text
+DATABASE_URL=postgresql://...
+SESSION_SECRET=long-random-secret
+MAX_USERS=2
+ALLOW_SIGNUPS=true
+```
 
 ## API Overview
 
@@ -271,7 +299,7 @@ For the MVP, the laptop runs the SignalOS server and owns the central SQLite dat
 
 The current notification bridge is calendar-based:
 
-- confirmed reminders are exposed through `/api/calendar.ics`
+- confirmed reminders are exposed through a per-user `/api/calendar.ics?token=...` feed
 - the feed can be subscribed to from calendar apps
 - direct Google Calendar API sync is planned next
 

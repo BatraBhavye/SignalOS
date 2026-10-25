@@ -9,7 +9,35 @@
     <link rel="stylesheet" href="/static/styles.css" />
   </head>
   <body>
-    <main class="app-shell">
+    <section id="authView" class="auth-view hidden">
+      <div class="auth-card">
+        <div class="brand-lockup">
+          <div class="mark">S</div>
+          <div>
+            <p class="eyebrow">Private action inbox</p>
+            <h1>SignalOS</h1>
+            <p class="tagline">Sign in to keep reminders separated by account.</p>
+          </div>
+        </div>
+        <form id="authForm" class="auth-form">
+          <label>
+            Username
+            <input id="authUsername" type="text" autocomplete="username" placeholder="you" />
+          </label>
+          <label>
+            Password
+            <input id="authPassword" type="password" autocomplete="current-password" placeholder="At least 8 characters" />
+          </label>
+          <p id="authMessage" class="auth-message"></p>
+          <div class="auth-actions">
+            <button id="loginBtn" type="submit">Sign in</button>
+            <button id="signupBtn" class="secondary" type="button">Create account</button>
+          </div>
+        </form>
+      </div>
+    </section>
+
+    <main id="appShell" class="app-shell hidden">
       <header class="topbar">
         <div class="brand-lockup">
           <div class="mark">S</div>
@@ -21,6 +49,8 @@
         </div>
         <div class="top-actions">
           <a class="icon-link" href="/api/calendar.ics" title="Export calendar">Calendar</a>
+          <span id="userPill" class="system-pill subtle-pill">signed in</span>
+          <button id="logoutBtn" class="secondary" type="button">Logout</button>
           <span class="system-pill"><span></span> Phone inbox ready</span>
         </div>
       </header>

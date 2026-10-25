@@ -8,3 +8,7 @@ services:
     envVars:
       - key: DATABASE_URL
         sync: false
+      - key: SESSION_SECRET
+        sync: false
+      - key: MAX_USERS
+        sync: false
