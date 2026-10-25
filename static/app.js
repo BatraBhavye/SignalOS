@@ -413,16 +413,20 @@ async function loadSetup() {
     webhookUrl.textContent = setup.webhook_url;
     calendarUrl.textContent = setup.calendar_url;
     setupStatus.textContent = "ready";
+    const aiMode = setup.ai?.mode === "bridge" ? "AI bridge" : "Local AI";
     if (setup.ai?.online) {
-      aiStatusPill.textContent = setup.ai.mode === "bridge" ? "AI bridge online" : "AI online";
+      aiStatusPill.textContent = `${aiMode} online`;
+      aiStatusPill.title = `${aiMode} is reachable. SignalOS can use AI review.`;
       aiStatusPill.dataset.state = "online";
     } else {
-      aiStatusPill.textContent = "AI offline, rules active";
+      aiStatusPill.textContent = `${aiMode} offline, rules active`;
+      aiStatusPill.title = `${aiMode} is not reachable from this server. SignalOS is still online with deterministic rules.`;
       aiStatusPill.dataset.state = "offline";
     }
   } catch (error) {
     setupStatus.textContent = "offline";
     aiStatusPill.textContent = "AI status unknown";
+    aiStatusPill.title = "SignalOS could not check AI status.";
     aiStatusPill.dataset.state = "offline";
   }
 }
