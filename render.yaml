@@ -12,3 +12,9 @@ services:
         sync: false
       - key: MAX_USERS
         sync: false
+      - key: AI_BRIDGE_URL
+        sync: false
+      - key: AI_BRIDGE_TOKEN
+        sync: false
+      - key: OLLAMA_MODEL
+        value: llama3.1:8b
