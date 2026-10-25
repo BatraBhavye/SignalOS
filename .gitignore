@@ -5,6 +5,7 @@ venv/
 env/
 .env
 .env.bridge.local
+start_ai_bridge.bat
 .pytest_cache/
 .ruff_cache/
 data/*.db

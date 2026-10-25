@@ -35,6 +35,19 @@ echo Starting SignalOS AI bridge on http://127.0.0.1:8787
 echo Keep this window open while you want hosted SignalOS to use local Ollama.
 echo.
 
+where ollama >nul 2>nul
+if %errorlevel%==0 (
+  echo Starting Ollama in a separate window if it is not already running.
+  start "SignalOS Ollama" /min cmd /k "ollama serve"
+) else (
+  echo Ollama was not found in PATH. Start it manually before using AI review.
+)
+
+if not "%AI_BRIDGE_TUNNEL_COMMAND%"=="" (
+  echo Starting configured tunnel in a separate window.
+  start "SignalOS AI Tunnel" cmd /k "%AI_BRIDGE_TUNNEL_COMMAND%"
+)
+
 python -m uvicorn ai_bridge:app --host 127.0.0.1 --port 8787
 
 echo.

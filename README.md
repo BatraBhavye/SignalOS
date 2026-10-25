@@ -234,6 +234,8 @@ Then double-click:
 start_ai_bridge.bat
 ```
 
+`start_ai_bridge.bat` is intentionally ignored by Git so your personal startup flow stays private. GitHub includes `start_ai_bridge.example.bat` as the template for other users.
+
 Or run the same bridge manually:
 
 ```powershell
