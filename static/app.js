@@ -10,6 +10,7 @@ const signupBtn = document.querySelector("#signupBtn");
 const logoutBtn = document.querySelector("#logoutBtn");
 const userPill = document.querySelector("#userPill");
 const aiStatusPill = document.querySelector("#aiStatusPill");
+const calendarBtn = document.querySelector("#calendarBtn");
 const analyzeBtn = document.querySelector("#analyzeBtn");
 const candidateList = document.querySelector("#candidateList");
 const reminderList = document.querySelector("#reminderList");
@@ -34,6 +35,7 @@ let activeFilter = "scheduled";
 let remindersCache = [];
 let pendingCache = [];
 let currentUser = null;
+let calendarState = { configured: false, connected: false };
 
 function formatDate(value) {
   if (!value) return "No deadline detected";
@@ -421,11 +423,35 @@ async function loadSetup() {
   }
 }
 
+async function loadCalendarStatus() {
+  try {
+    const response = await apiFetch("/api/calendar/status");
+    if (!response.ok) throw new Error(`HTTP ${response.status}`);
+    calendarState = await response.json();
+    if (!calendarState.configured) {
+      calendarBtn.textContent = "Calendar feed";
+      calendarBtn.title = "Google Calendar is not configured. Opens the private ICS feed.";
+      return;
+    }
+    if (calendarState.connected) {
+      calendarBtn.textContent = "Calendar synced";
+      calendarBtn.title = "Google Calendar connected. Click to sync now.";
+      return;
+    }
+    calendarBtn.textContent = "Connect calendar";
+    calendarBtn.title = "Connect your Google Calendar.";
+  } catch (error) {
+    calendarBtn.textContent = "Calendar";
+    calendarBtn.title = "Calendar status unavailable.";
+  }
+}
+
 async function loadAppData() {
   await Promise.all([
     loadReminders(),
     loadPendingCandidates(),
     loadSetup(),
+    loadCalendarStatus(),
     loadWeeklyReport()
   ]);
 }
@@ -511,6 +537,24 @@ logoutBtn.addEventListener("click", async () => {
   candidateList.innerHTML = "";
   setEmpty("Sign in to continue.");
   showAuth("Signed out.");
+});
+calendarBtn.addEventListener("click", async () => {
+  if (!calendarState.configured) {
+    window.location.href = "/api/calendar.ics";
+    return;
+  }
+  if (!calendarState.connected) {
+    window.location.href = "/api/calendar/google/connect";
+    return;
+  }
+  calendarBtn.disabled = true;
+  calendarBtn.textContent = "Syncing";
+  try {
+    await apiFetch("/api/calendar/google/sync", { method: "POST" });
+    await loadCalendarStatus();
+  } finally {
+    calendarBtn.disabled = false;
+  }
 });
 fileInput.addEventListener("change", async (event) => {
   const file = event.target.files?.[0];

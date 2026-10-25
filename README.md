@@ -312,7 +312,27 @@ ALLOW_SIGNUPS=true
 AI_BRIDGE_URL=https://your-tunnel-url
 AI_BRIDGE_TOKEN=long-random-bridge-secret
 OLLAMA_MODEL=llama3.1:8b
+GOOGLE_CLIENT_ID=google-oauth-client-id
+GOOGLE_CLIENT_SECRET=google-oauth-client-secret
+GOOGLE_REDIRECT_URI=https://your-render-url/api/calendar/google/callback
 ```
+
+## Google Calendar OAuth Setup
+
+To enable user-oriented Google Calendar sync:
+
+1. Create a Google Cloud project.
+2. Enable the Google Calendar API.
+3. Create an OAuth client for a web application.
+4. Add this authorized redirect URI:
+
+```text
+https://your-render-url/api/calendar/google/callback
+```
+
+5. Put the client ID, client secret, and redirect URI into Render environment variables.
+
+Each SignalOS user connects their own Google account from the Calendar button in the app. SignalOS uses the `https://www.googleapis.com/auth/calendar.events` scope so it can create, update, and delete events for that connected user.
 
 ## API Overview
 
@@ -358,6 +378,24 @@ Calendar feed:
 GET /api/calendar.ics
 ```
 
+Google Calendar status:
+
+```text
+GET /api/calendar/status
+```
+
+Connect Google Calendar:
+
+```text
+GET /api/calendar/google/connect
+```
+
+Sync connected user's reminders:
+
+```text
+POST /api/calendar/google/sync
+```
+
 Setup URLs for phone, webhook, and calendar:
 
 ```text
@@ -368,13 +406,16 @@ GET /api/setup
 
 For the MVP, the laptop runs the SignalOS server and owns the central SQLite database. Laptop browser, phone browser, and iPhone Shortcuts can all talk to the same local server when they are on the same network.
 
-The current notification bridge is calendar-based:
+The calendar layer supports both an ICS fallback and per-user Google Calendar OAuth:
 
 - confirmed reminders are exposed through a per-user `/api/calendar.ics?token=...` feed
 - the feed can be subscribed to from calendar apps
-- direct Google Calendar API sync is planned next
+- each logged-in user can connect their own Google Calendar account
+- confirmed scheduled reminders are inserted or updated on that user's primary Google Calendar
+- completing or deleting a reminder removes the linked Google Calendar event when possible
+- Google credentials are stored per user and are not shared between accounts
 
-The database already includes calendar sync metadata fields for that next step:
+The database includes calendar sync metadata fields:
 
 - `calendar_provider`
 - `calendar_event_id`

@@ -10,6 +10,7 @@ import secrets
 import socket
 import sqlite3
 import urllib.error
+import urllib.parse
 import urllib.request
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -18,7 +19,7 @@ from uuid import uuid4
 
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse, Response
+from fastapi.responses import FileResponse, RedirectResponse, Response
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
@@ -43,6 +44,15 @@ OLLAMA_MODEL = os.getenv("OLLAMA_MODEL", "llama3.1:8b")
 OLLAMA_BASE_URL = os.getenv("OLLAMA_BASE_URL", "http://127.0.0.1:11434").rstrip("/")
 AI_BRIDGE_URL = os.getenv("AI_BRIDGE_URL", "").rstrip("/")
 AI_BRIDGE_TOKEN = os.getenv("AI_BRIDGE_TOKEN", "")
+GOOGLE_CLIENT_ID = os.getenv("GOOGLE_CLIENT_ID", "")
+GOOGLE_CLIENT_SECRET = os.getenv("GOOGLE_CLIENT_SECRET", "")
+GOOGLE_REDIRECT_URI = os.getenv("GOOGLE_REDIRECT_URI", "")
+GOOGLE_CALENDAR_SCOPE = "https://www.googleapis.com/auth/calendar.events"
+GOOGLE_AUTH_URL = "https://accounts.google.com/o/oauth2/v2/auth"
+GOOGLE_TOKEN_URL = "https://oauth2.googleapis.com/token"
+GOOGLE_REVOKE_URL = "https://oauth2.googleapis.com/revoke"
+GOOGLE_CALENDAR_API = "https://www.googleapis.com/calendar/v3"
+GOOGLE_TIME_ZONE = "Asia/Kolkata"
 
 ReminderType = Literal["reminder", "task", "event", "important_date", "note"]
 Priority = Literal["low", "medium", "high"]
@@ -278,8 +288,17 @@ def claim_unowned_data(conn: Database, user_id: str) -> None:
 
 def ensure_user_columns(conn: Database) -> None:
     existing = table_columns(conn, "users")
-    if "api_token" not in existing:
-        conn.execute("ALTER TABLE users ADD COLUMN api_token TEXT")
+    columns = {
+        "api_token": "TEXT",
+        "google_access_token": "TEXT",
+        "google_refresh_token": "TEXT",
+        "google_token_expires_at": "TEXT",
+        "google_calendar_id": "TEXT NOT NULL DEFAULT 'primary'",
+        "google_calendar_connected_at": "TEXT",
+    }
+    for name, definition in columns.items():
+        if name not in existing:
+            conn.execute(f"ALTER TABLE users ADD COLUMN {name} {definition}")
     rows = conn.execute("SELECT id FROM users WHERE api_token IS NULL OR api_token = ''").fetchall()
     for row in rows:
         conn.execute("UPDATE users SET api_token = ? WHERE id = ?", (generate_token(), row["id"]))
@@ -322,6 +341,11 @@ def init_db() -> None:
                 username TEXT NOT NULL UNIQUE,
                 password_hash TEXT NOT NULL,
                 api_token TEXT,
+                google_access_token TEXT,
+                google_refresh_token TEXT,
+                google_token_expires_at TEXT,
+                google_calendar_id TEXT NOT NULL DEFAULT 'primary',
+                google_calendar_connected_at TEXT,
                 created_at TEXT NOT NULL
             )
             """
@@ -1399,6 +1423,203 @@ def ai_runtime_status() -> dict[str, Any]:
     }
 
 
+def google_calendar_configured() -> bool:
+    return bool(GOOGLE_CLIENT_ID and GOOGLE_CLIENT_SECRET)
+
+
+def google_redirect_uri(request: Request) -> str:
+    if GOOGLE_REDIRECT_URI:
+        return GOOGLE_REDIRECT_URI
+    origin = setup_urls(request)["laptop_url"]
+    return f"{origin}/api/calendar/google/callback"
+
+
+def sign_oauth_state(user_id: str) -> str:
+    issued_at = str(int(datetime.now(IST).timestamp()))
+    nonce = secrets.token_urlsafe(16)
+    payload = f"{user_id}:{issued_at}:{nonce}"
+    signature = hmac.new(SESSION_SECRET.encode("utf-8"), payload.encode("utf-8"), hashlib.sha256).hexdigest()
+    return base64.urlsafe_b64encode(f"{payload}:{signature}".encode("utf-8")).decode("ascii")
+
+
+def verify_oauth_state(raw_state: str | None) -> str | None:
+    if not raw_state:
+        return None
+    try:
+        decoded = base64.urlsafe_b64decode(raw_state.encode("ascii")).decode("utf-8")
+        user_id, issued_at, nonce, signature = decoded.split(":", 3)
+    except (ValueError, UnicodeDecodeError):
+        return None
+    payload = f"{user_id}:{issued_at}:{nonce}"
+    expected = hmac.new(SESSION_SECRET.encode("utf-8"), payload.encode("utf-8"), hashlib.sha256).hexdigest()
+    if not hmac.compare_digest(signature, expected):
+        return None
+    if int(datetime.now(IST).timestamp()) - int(issued_at) > 600:
+        return None
+    return user_id
+
+
+def google_json_request(url: str, method: str, payload: dict[str, Any] | None = None, token: str | None = None) -> dict[str, Any]:
+    data = json.dumps(payload).encode("utf-8") if payload is not None else None
+    headers = {"Content-Type": "application/json"}
+    if token:
+        headers["Authorization"] = f"Bearer {token}"
+    req = urllib.request.Request(url, data=data, headers=headers, method=method)
+    with urllib.request.urlopen(req, timeout=20) as response:
+        body = response.read().decode("utf-8")
+    return json.loads(body) if body else {}
+
+
+def google_form_request(url: str, payload: dict[str, str]) -> dict[str, Any]:
+    data = urllib.parse.urlencode(payload).encode("utf-8")
+    req = urllib.request.Request(
+        url,
+        data=data,
+        headers={"Content-Type": "application/x-www-form-urlencoded"},
+        method="POST",
+    )
+    with urllib.request.urlopen(req, timeout=20) as response:
+        return json.loads(response.read().decode("utf-8"))
+
+
+def google_token_expiry(seconds: int | None) -> str:
+    return (datetime.now(IST) + timedelta(seconds=seconds or 3600)).isoformat(timespec="seconds")
+
+
+def google_access_token(user: dict[str, Any]) -> str | None:
+    access_token = user.get("google_access_token")
+    refresh_token = user.get("google_refresh_token")
+    expires_at = parse_stored_datetime(user.get("google_token_expires_at"))
+    if access_token and expires_at and expires_at > datetime.now(IST).replace(tzinfo=None) + timedelta(minutes=2):
+        return access_token
+    if not refresh_token or not google_calendar_configured():
+        return None
+    token_data = google_form_request(
+        GOOGLE_TOKEN_URL,
+        {
+            "client_id": GOOGLE_CLIENT_ID,
+            "client_secret": GOOGLE_CLIENT_SECRET,
+            "refresh_token": refresh_token,
+            "grant_type": "refresh_token",
+        },
+    )
+    access_token = token_data.get("access_token")
+    if not access_token:
+        return None
+    with db() as conn:
+        conn.execute(
+            """
+            UPDATE users
+            SET google_access_token = ?, google_token_expires_at = ?
+            WHERE id = ?
+            """,
+            (access_token, google_token_expiry(token_data.get("expires_in")), user["id"]),
+        )
+    return access_token
+
+
+def google_calendar_status_for_user(user: dict[str, Any]) -> dict[str, Any]:
+    connected = bool(user.get("google_refresh_token"))
+    return {
+        "configured": google_calendar_configured(),
+        "connected": connected,
+        "calendar_id": user.get("google_calendar_id") or "primary",
+        "connected_at": user.get("google_calendar_connected_at"),
+        "provider": "google" if connected else "ics",
+    }
+
+
+def google_event_body(reminder: dict[str, Any]) -> dict[str, Any]:
+    start_value = reminder.get("due_at")
+    start = datetime.fromisoformat(start_value.replace("Z", "+00:00")) if start_value else datetime.now(IST) + timedelta(hours=1)
+    end = start + timedelta(minutes=30)
+    recurrence = recurrence_to_rrule(reminder)
+    body: dict[str, Any] = {
+        "summary": reminder.get("title") or "SignalOS reminder",
+        "description": reminder.get("source_text") or "Created by SignalOS",
+        "start": {"dateTime": start.isoformat(), "timeZone": GOOGLE_TIME_ZONE},
+        "end": {"dateTime": end.isoformat(), "timeZone": GOOGLE_TIME_ZONE},
+        "reminders": {
+            "useDefault": False,
+            "overrides": [{"method": "popup", "minutes": int(reminder.get("lead_minutes") or 10)}],
+        },
+    }
+    if recurrence:
+        body["recurrence"] = [recurrence]
+    return body
+
+
+def mark_calendar_sync(reminder_id: str, user_id: str, status: str, event_id: str | None = None) -> None:
+    synced_at = datetime.now(IST).isoformat(timespec="seconds")
+    with db() as conn:
+        if event_id:
+            conn.execute(
+                """
+                UPDATE reminders
+                SET calendar_provider = 'google', calendar_event_id = ?, calendar_synced_at = ?, calendar_sync_status = ?
+                WHERE id = ? AND user_id = ?
+                """,
+                (event_id, synced_at, status, reminder_id, user_id),
+            )
+        else:
+            conn.execute(
+                """
+                UPDATE reminders
+                SET calendar_synced_at = ?, calendar_sync_status = ?
+                WHERE id = ? AND user_id = ?
+                """,
+                (synced_at, status, reminder_id, user_id),
+            )
+
+
+def clear_calendar_link(reminder_id: str, user_id: str) -> None:
+    with db() as conn:
+        conn.execute(
+            """
+            UPDATE reminders
+            SET calendar_event_id = NULL, calendar_sync_status = 'not_synced'
+            WHERE id = ? AND user_id = ?
+            """,
+            (reminder_id, user_id),
+        )
+
+
+def sync_reminder_to_google(user: dict[str, Any], reminder: dict[str, Any]) -> None:
+    if not reminder.get("due_at") or reminder.get("status") != "scheduled":
+        return
+    token = google_access_token(user)
+    if not token:
+        return
+    calendar_id = urllib.parse.quote(user.get("google_calendar_id") or "primary", safe="")
+    event_id = reminder.get("calendar_event_id")
+    body = google_event_body(reminder)
+    try:
+        if event_id:
+            url = f"{GOOGLE_CALENDAR_API}/calendars/{calendar_id}/events/{urllib.parse.quote(event_id, safe='')}"
+            event = google_json_request(url, "PUT", body, token)
+        else:
+            url = f"{GOOGLE_CALENDAR_API}/calendars/{calendar_id}/events"
+            event = google_json_request(url, "POST", body, token)
+        mark_calendar_sync(reminder["id"], user["id"], "synced", event.get("id") or event_id)
+    except (urllib.error.URLError, urllib.error.HTTPError, TimeoutError, json.JSONDecodeError, ValueError):
+        mark_calendar_sync(reminder["id"], user["id"], "failed")
+
+
+def delete_google_event(user: dict[str, Any], reminder: dict[str, Any]) -> None:
+    event_id = reminder.get("calendar_event_id")
+    token = google_access_token(user)
+    if not event_id or not token:
+        return
+    calendar_id = urllib.parse.quote(user.get("google_calendar_id") or "primary", safe="")
+    url = f"{GOOGLE_CALENDAR_API}/calendars/{calendar_id}/events/{urllib.parse.quote(event_id, safe='')}"
+    try:
+        req = urllib.request.Request(url, headers={"Authorization": f"Bearer {token}"}, method="DELETE")
+        urllib.request.urlopen(req, timeout=20).read()
+    except (urllib.error.URLError, urllib.error.HTTPError, TimeoutError):
+        return
+    clear_calendar_link(reminder["id"], user["id"])
+
+
 @app.on_event("startup")
 def on_startup() -> None:
     init_db()
@@ -1493,6 +1714,120 @@ def setup(request: Request) -> dict[str, Any]:
     }
 
 
+@app.get("/api/calendar/status")
+def calendar_status(request: Request) -> dict[str, Any]:
+    user = get_current_user(request)
+    return google_calendar_status_for_user(user)
+
+
+@app.get("/api/calendar/google/connect")
+def google_calendar_connect(request: Request) -> RedirectResponse:
+    user = get_current_user(request)
+    if not google_calendar_configured():
+        raise HTTPException(status_code=503, detail="Google Calendar is not configured")
+    query = urllib.parse.urlencode(
+        {
+            "client_id": GOOGLE_CLIENT_ID,
+            "redirect_uri": google_redirect_uri(request),
+            "response_type": "code",
+            "scope": GOOGLE_CALENDAR_SCOPE,
+            "access_type": "offline",
+            "include_granted_scopes": "true",
+            "prompt": "consent",
+            "state": sign_oauth_state(user["id"]),
+        }
+    )
+    return RedirectResponse(f"{GOOGLE_AUTH_URL}?{query}")
+
+
+@app.get("/api/calendar/google/callback")
+def google_calendar_callback(request: Request, code: str | None = None, state: str | None = None, error: str | None = None) -> RedirectResponse:
+    if error:
+        return RedirectResponse("/?calendar=google_error")
+    user_id = verify_oauth_state(state)
+    if not user_id or not code:
+        raise HTTPException(status_code=400, detail="Invalid Google Calendar OAuth state")
+    token_data = google_form_request(
+        GOOGLE_TOKEN_URL,
+        {
+            "client_id": GOOGLE_CLIENT_ID,
+            "client_secret": GOOGLE_CLIENT_SECRET,
+            "code": code,
+            "grant_type": "authorization_code",
+            "redirect_uri": google_redirect_uri(request),
+        },
+    )
+    refresh_token = token_data.get("refresh_token")
+    access_token = token_data.get("access_token")
+    if not access_token:
+        raise HTTPException(status_code=400, detail="Google did not return an access token")
+    existing_user = get_user_by_id(user_id)
+    if not refresh_token and existing_user:
+        refresh_token = existing_user.get("google_refresh_token")
+    if not refresh_token:
+        raise HTTPException(status_code=400, detail="Google did not return a refresh token")
+    connected_at = datetime.now(IST).isoformat(timespec="seconds")
+    with db() as conn:
+        conn.execute(
+            """
+            UPDATE users
+            SET google_access_token = ?, google_refresh_token = ?, google_token_expires_at = ?,
+                google_calendar_id = 'primary', google_calendar_connected_at = ?
+            WHERE id = ?
+            """,
+            (access_token, refresh_token, google_token_expiry(token_data.get("expires_in")), connected_at, user_id),
+        )
+    user = get_user_by_id(user_id)
+    if user:
+        for reminder in list_reminders_for_user(user_id):
+            sync_reminder_to_google(user, reminder)
+    return RedirectResponse("/?calendar=google_connected")
+
+
+@app.post("/api/calendar/google/disconnect")
+def google_calendar_disconnect(request: Request) -> dict[str, Any]:
+    user = get_current_user(request)
+    refresh_token = user.get("google_refresh_token")
+    if refresh_token:
+        try:
+            google_form_request(GOOGLE_REVOKE_URL, {"token": refresh_token})
+        except (urllib.error.URLError, urllib.error.HTTPError, TimeoutError, json.JSONDecodeError, ValueError):
+            pass
+    with db() as conn:
+        conn.execute(
+            """
+            UPDATE users
+            SET google_access_token = NULL, google_refresh_token = NULL, google_token_expires_at = NULL,
+                google_calendar_connected_at = NULL
+            WHERE id = ?
+            """,
+            (user["id"],),
+        )
+        conn.execute(
+            """
+            UPDATE reminders
+            SET calendar_sync_status = 'not_synced'
+            WHERE user_id = ? AND calendar_provider = 'google'
+            """,
+            (user["id"],),
+        )
+    return {"status": "disconnected"}
+
+
+@app.post("/api/calendar/google/sync")
+def google_calendar_sync(request: Request) -> dict[str, Any]:
+    user = get_current_user(request)
+    if not user.get("google_refresh_token"):
+        raise HTTPException(status_code=400, detail="Google Calendar is not connected")
+    reminders = list_reminders_for_user(user["id"])
+    count = 0
+    for reminder in reminders:
+        if reminder.get("status") == "scheduled" and reminder.get("due_at"):
+            sync_reminder_to_google(user, reminder)
+            count += 1
+    return {"status": "sync_requested", "count": count}
+
+
 @app.post("/api/analyze")
 def analyze(payload: AnalyzeRequest, request: Request) -> dict[str, Any]:
     get_current_user(request)
@@ -1548,7 +1883,11 @@ def create_reminder(payload: ReminderIn, request: Request) -> dict[str, Any]:
                 created_at,
             ),
         )
-    return {"id": reminder_id, **payload.model_dump(), "status": "scheduled", "created_at": created_at}
+    reminder = {"id": reminder_id, **payload.model_dump(), "status": "scheduled", "created_at": created_at}
+    sync_reminder_to_google(user, reminder)
+    with db() as conn:
+        row = conn.execute("SELECT * FROM reminders WHERE id = ? AND user_id = ?", (reminder_id, user["id"])).fetchone()
+    return reminder_from_row(row)
 
 
 @app.post("/api/webhook/capture")
@@ -1658,12 +1997,24 @@ def update_reminder(reminder_id: str, payload: ReminderPatch, request: Request) 
             values,
         )
         row = conn.execute("SELECT * FROM reminders WHERE id = ? AND user_id = ?", (reminder_id, user["id"])).fetchone()
+    reminder = reminder_from_row(row)
+    if reminder.get("status") == "scheduled":
+        sync_reminder_to_google(user, reminder)
+    else:
+        delete_google_event(user, reminder)
+    with db() as conn:
+        row = conn.execute("SELECT * FROM reminders WHERE id = ? AND user_id = ?", (reminder_id, user["id"])).fetchone()
     return reminder_from_row(row)
 
 
 @app.delete("/api/reminders/{reminder_id}")
 def delete_reminder(reminder_id: str, request: Request) -> dict[str, str]:
     user = get_current_user(request)
+    with db() as conn:
+        row = conn.execute("SELECT * FROM reminders WHERE id = ? AND user_id = ?", (reminder_id, user["id"])).fetchone()
+    if row is None:
+        raise HTTPException(status_code=404, detail="Reminder not found")
+    delete_google_event(user, reminder_from_row(row))
     with db() as conn:
         result = conn.execute("DELETE FROM reminders WHERE id = ? AND user_id = ?", (reminder_id, user["id"]))
     if result.rowcount == 0:

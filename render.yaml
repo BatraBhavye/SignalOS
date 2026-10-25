@@ -18,3 +18,9 @@ services:
         sync: false
       - key: OLLAMA_MODEL
         value: llama3.1:8b
+      - key: GOOGLE_CLIENT_ID
+        sync: false
+      - key: GOOGLE_CLIENT_SECRET
+        sync: false
+      - key: GOOGLE_REDIRECT_URI
+        sync: false
