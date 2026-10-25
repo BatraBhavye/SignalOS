@@ -9,6 +9,7 @@ const loginBtn = document.querySelector("#loginBtn");
 const signupBtn = document.querySelector("#signupBtn");
 const logoutBtn = document.querySelector("#logoutBtn");
 const userPill = document.querySelector("#userPill");
+const aiStatusPill = document.querySelector("#aiStatusPill");
 const analyzeBtn = document.querySelector("#analyzeBtn");
 const candidateList = document.querySelector("#candidateList");
 const reminderList = document.querySelector("#reminderList");
@@ -412,8 +413,17 @@ async function loadSetup() {
     webhookUrl.textContent = setup.webhook_url;
     calendarUrl.textContent = setup.calendar_url;
     setupStatus.textContent = "ready";
+    if (setup.ai?.online) {
+      aiStatusPill.textContent = setup.ai.mode === "bridge" ? "AI bridge online" : "AI online";
+      aiStatusPill.dataset.state = "online";
+    } else {
+      aiStatusPill.textContent = "AI offline, rules active";
+      aiStatusPill.dataset.state = "offline";
+    }
   } catch (error) {
     setupStatus.textContent = "offline";
+    aiStatusPill.textContent = "AI status unknown";
+    aiStatusPill.dataset.state = "offline";
   }
 }
 

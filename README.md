@@ -194,7 +194,7 @@ For phone testing on the same Wi-Fi, open the phone URL shown in the in-app "Syn
 
 SignalOS works without Ollama using deterministic extraction.
 
-For local GenAI extraction:
+For local GenAI extraction while running the app on the same laptop:
 
 ```powershell
 ollama pull llama3.1:8b
@@ -203,6 +203,40 @@ ollama serve
 
 When Ollama is running, SignalOS automatically attempts local model extraction and validates/merges it with deterministic rules. If Ollama is unavailable or times out, the app falls back to rules.
 
+## Optional AI Bridge For Hosted App
+
+The hosted Render app cannot directly access Ollama running on your laptop unless the laptop exposes a small authenticated bridge.
+
+The bridge behavior is:
+
+- laptop on + bridge tunnel online: hosted SignalOS can use local Ollama for AI review
+- laptop off or tunnel offline: hosted SignalOS stays online and falls back to deterministic rules
+- no AI token cost: Ollama runs locally on your laptop
+- bridge is protected with `AI_BRIDGE_TOKEN`
+
+On your laptop, start Ollama:
+
+```powershell
+ollama serve
+```
+
+In a second terminal, run the bridge:
+
+```powershell
+$env:AI_BRIDGE_TOKEN="replace-with-a-long-random-secret"
+python -m uvicorn ai_bridge:app --host 0.0.0.0 --port 8787
+```
+
+Expose port `8787` with a secure tunnel such as Cloudflare Tunnel, Tailscale Funnel, or ngrok. Then set these environment variables on Render:
+
+```text
+AI_BRIDGE_URL=https://your-tunnel-url
+AI_BRIDGE_TOKEN=the-same-long-random-secret
+OLLAMA_MODEL=llama3.1:8b
+```
+
+The SignalOS UI shows `AI bridge online` when the bridge is reachable. If it shows `AI offline, rules active`, reminders still work with deterministic extraction.
+
 ## Free Long-Term Deployment
 
 The recommended no-spend deployment path for personal use is:
@@ -210,7 +244,7 @@ The recommended no-spend deployment path for personal use is:
 - Render Free web service for the FastAPI app
 - Neon Free Postgres for persistent online storage
 - deterministic extraction online
-- Ollama remains a local-only enhancement unless a hosted model provider is added later
+- optional AI bridge to use your laptop's local Ollama when it is awake
 
 This avoids Render's expiring free Postgres database. The app still uses local SQLite when `DATABASE_URL` is not set.
 
@@ -231,7 +265,7 @@ Important free-tier limits:
 - Render Free web services can sleep after inactivity, so the first request may take about a minute
 - Neon Free compute can suspend after inactivity, so the first database query may also have a short cold start
 - Neon Free storage persists within its free limits, but the app should still be exported/backed up if it becomes important
-- hosted deployment does not run your laptop's local Ollama instance
+- hosted deployment only uses your laptop's local Ollama when `AI_BRIDGE_URL` is reachable
 - the open-source default allows signups; set `MAX_USERS` to cap accounts on your own deployment
 
 Useful environment variables:
@@ -241,6 +275,9 @@ DATABASE_URL=postgresql://...
 SESSION_SECRET=long-random-secret
 MAX_USERS=2
 ALLOW_SIGNUPS=true
+AI_BRIDGE_URL=https://your-tunnel-url
+AI_BRIDGE_TOKEN=long-random-bridge-secret
+OLLAMA_MODEL=llama3.1:8b
 ```
 
 ## API Overview

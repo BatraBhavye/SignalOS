@@ -286,6 +286,18 @@ h3 {
   justify-content: center;
 }
 
+.system-pill[data-state="online"] {
+  color: var(--accent);
+  border-color: rgba(92, 225, 220, 0.25);
+  background: rgba(92, 225, 220, 0.08);
+}
+
+.system-pill[data-state="offline"] {
+  color: #ffd28a;
+  border-color: rgba(255, 210, 138, 0.24);
+  background: rgba(255, 210, 138, 0.07);
+}
+
 .workspace {
   display: grid;
   grid-template-columns: minmax(0, 1fr) minmax(360px, 0.9fr);

@@ -39,6 +39,10 @@ SESSION_COOKIE = "signalos_session"
 SESSION_SECRET = os.getenv("SESSION_SECRET", "signalos-dev-session-secret-change-me")
 MAX_USERS = int(os.getenv("MAX_USERS", "0") or "0")
 ALLOW_SIGNUPS = os.getenv("ALLOW_SIGNUPS", "true").lower() not in {"0", "false", "no"}
+OLLAMA_MODEL = os.getenv("OLLAMA_MODEL", "llama3.1:8b")
+OLLAMA_BASE_URL = os.getenv("OLLAMA_BASE_URL", "http://127.0.0.1:11434").rstrip("/")
+AI_BRIDGE_URL = os.getenv("AI_BRIDGE_URL", "").rstrip("/")
+AI_BRIDGE_TOKEN = os.getenv("AI_BRIDGE_TOKEN", "")
 
 ReminderType = Literal["reminder", "task", "event", "important_date", "note"]
 Priority = Literal["low", "medium", "high"]
@@ -1041,7 +1045,7 @@ Use concise titles such as "Bus journey: Delhi to Jaipur", "Pay fees", or "Submi
 """
     payload = json.dumps(
         {
-            "model": "llama3.1:8b",
+            "model": OLLAMA_MODEL,
             "prompt": prompt,
             "format": "json",
             "stream": False,
@@ -1050,7 +1054,7 @@ Use concise titles such as "Bus journey: Delhi to Jaipur", "Pay fees", or "Submi
         }
     ).encode("utf-8")
     req = urllib.request.Request(
-        "http://127.0.0.1:11434/api/generate",
+        f"{OLLAMA_BASE_URL}/api/generate",
         data=payload,
         headers={"Content-Type": "application/json"},
         method="POST",
@@ -1073,6 +1077,48 @@ Use concise titles such as "Bus journey: Delhi to Jaipur", "Pay fees", or "Submi
             source_type=source_type,
             extractor="ollama",
             source_reason=item.get("source_reason") or "Ollama detected action intent.",
+            recurrence=recurrence,
+        )
+        cleaned.append({"id": str(uuid4()), "needs_confirmation": True, **candidate.model_dump()})
+    return cleaned
+
+
+def bridge_headers() -> dict[str, str]:
+    headers = {"Content-Type": "application/json"}
+    if AI_BRIDGE_TOKEN:
+        headers["X-SignalOS-Bridge-Token"] = AI_BRIDGE_TOKEN
+    return headers
+
+
+def bridge_extract(text: str, now: datetime, source_type: str = "text") -> list[dict[str, Any]]:
+    payload = json.dumps(
+        {
+            "text": text,
+            "now": now.isoformat(timespec="minutes"),
+            "source_type": source_type,
+        }
+    ).encode("utf-8")
+    req = urllib.request.Request(
+        f"{AI_BRIDGE_URL}/api/bridge/extract",
+        data=payload,
+        headers=bridge_headers(),
+        method="POST",
+    )
+    with urllib.request.urlopen(req, timeout=45) as response:
+        parsed = json.loads(response.read().decode("utf-8"))
+    cleaned = []
+    for item in parsed.get("candidates", parsed.get("items", [])):
+        recurrence = Recurrence(**(item.get("recurrence") or {}))
+        candidate = ReminderIn(
+            title=str(item.get("title") or "New reminder"),
+            reminder_type=item.get("reminder_type") or "reminder",
+            due_at=item.get("due_at"),
+            priority=item.get("priority") or "medium",
+            confidence=float(item.get("confidence") or 0.7),
+            source_text=item.get("source_text") or text,
+            source_type=source_type,
+            extractor="bridge+ollama",
+            source_reason=item.get("source_reason") or "Local AI bridge detected action intent.",
             recurrence=recurrence,
         )
         cleaned.append({"id": str(uuid4()), "needs_confirmation": True, **candidate.model_dump()})
@@ -1238,12 +1284,13 @@ def extract_candidates(text: str, now: datetime, source_type: str, use_ollama: b
     if not use_ollama:
         return add_extraction_feedback(rule_candidates, None, False), None
     try:
+        ai_candidates = bridge_extract(text, now, source_type) if AI_BRIDGE_URL else ollama_extract(text, now, source_type)
         merged = merge_ollama_with_rules(
-            ollama_extract(text, now, source_type),
+            ai_candidates,
             rule_candidates,
         )
         return add_extraction_feedback(merged, None, True), None
-    except (urllib.error.URLError, TimeoutError, json.JSONDecodeError, ValueError) as exc:
+    except (urllib.error.URLError, urllib.error.HTTPError, TimeoutError, json.JSONDecodeError, ValueError) as exc:
         return add_extraction_feedback(rule_candidates, str(exc), True), str(exc)
 
 
@@ -1295,6 +1342,25 @@ def setup_urls(request: Request) -> dict[str, str]:
         "phone_url": phone_origin,
         "webhook_url": f"{phone_origin}/api/webhook/capture",
         "calendar_url": f"{phone_origin}/api/calendar.ics",
+    }
+
+
+def ai_runtime_status() -> dict[str, Any]:
+    mode = "bridge" if AI_BRIDGE_URL else "local_ollama"
+    label = "AI bridge" if AI_BRIDGE_URL else "Local Ollama"
+    url = f"{AI_BRIDGE_URL}/api/bridge/health" if AI_BRIDGE_URL else f"{OLLAMA_BASE_URL}/api/tags"
+    headers = bridge_headers() if AI_BRIDGE_URL else {}
+    req = urllib.request.Request(url, headers=headers, method="GET")
+    try:
+        with urllib.request.urlopen(req, timeout=2) as response:
+            online = 200 <= response.status < 300
+    except (urllib.error.URLError, urllib.error.HTTPError, TimeoutError, OSError, ValueError):
+        online = False
+    return {
+        "mode": mode,
+        "label": label,
+        "online": online,
+        "fallback": "deterministic_rules",
     }
 
 
@@ -1381,6 +1447,7 @@ def setup(request: Request) -> dict[str, Any]:
         urls["calendar_url"] = f"{urls['phone_url']}/api/calendar.ics?token={user['api_token']}"
     return {
         **urls,
+        "ai": ai_runtime_status(),
         "shortcut_body": {
             "text": "Shortcut Input",
             "source_type": "iphone_shortcut",
