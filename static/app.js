@@ -24,11 +24,6 @@ const importantCount = document.querySelector("#importantCount");
 const recurringCount = document.querySelector("#recurringCount");
 const pendingCount = document.querySelector("#pendingCount");
 const pendingBadge = document.querySelector("#pendingBadge");
-const setupStatus = document.querySelector("#setupStatus");
-const phoneUrl = document.querySelector("#phoneUrl");
-const webhookUrl = document.querySelector("#webhookUrl");
-const calendarUrl = document.querySelector("#calendarUrl");
-const copyButtons = document.querySelectorAll("[data-copy-target]");
 const reportWeek = document.querySelector("#reportWeek");
 const completedWeek = document.querySelector("#completedWeek");
 const pendingWeek = document.querySelector("#pendingWeek");
@@ -409,10 +404,6 @@ async function loadSetup() {
     const response = await apiFetch("/api/setup");
     if (!response.ok) throw new Error(`HTTP ${response.status}`);
     const setup = await response.json();
-    phoneUrl.textContent = setup.phone_url;
-    webhookUrl.textContent = setup.webhook_url;
-    calendarUrl.textContent = setup.calendar_url;
-    setupStatus.textContent = "ready";
     const aiMode = setup.ai?.mode === "bridge" ? "AI bridge" : "Local AI";
     if (setup.ai?.online) {
       aiStatusPill.textContent = `${aiMode} online`;
@@ -424,7 +415,6 @@ async function loadSetup() {
       aiStatusPill.dataset.state = "offline";
     }
   } catch (error) {
-    setupStatus.textContent = "offline";
     aiStatusPill.textContent = "AI status unknown";
     aiStatusPill.title = "SignalOS could not check AI status.";
     aiStatusPill.dataset.state = "offline";
@@ -505,23 +495,6 @@ filterButtons.forEach((button) => {
     activeFilter = button.dataset.filter;
     filterButtons.forEach((item) => item.classList.toggle("active", item === button));
     renderReminders();
-  });
-});
-
-copyButtons.forEach((button) => {
-  button.addEventListener("click", async () => {
-    const target = document.querySelector(`#${button.dataset.copyTarget}`);
-    const value = target?.textContent || "";
-    if (!value || value === "Detecting...") return;
-    try {
-      await navigator.clipboard.writeText(value);
-      button.textContent = "Copied";
-      window.setTimeout(() => {
-        button.textContent = "Copy";
-      }, 1400);
-    } catch (error) {
-      button.textContent = "Select";
-    }
   });
 });
 

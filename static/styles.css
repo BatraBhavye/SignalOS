@@ -523,18 +523,6 @@ select {
   backdrop-filter: blur(22px);
 }
 
-.setup-panel {
-  margin-top: 18px;
-  padding: clamp(16px, 2vw, 22px);
-  border: 1px solid rgba(255, 255, 255, 0.08);
-  border-radius: 8px;
-  background:
-    linear-gradient(135deg, rgba(92, 225, 220, 0.07), rgba(167, 103, 255, 0.05)),
-    rgba(12, 8, 19, 0.6);
-  box-shadow: 0 20px 58px rgba(0, 0, 0, 0.22);
-  backdrop-filter: blur(22px);
-}
-
 .report-panel {
   margin-top: 18px;
   padding: clamp(16px, 2vw, 22px);
@@ -580,55 +568,6 @@ select {
   color: var(--ink);
   font-size: clamp(1.45rem, 3vw, 2.2rem);
   line-height: 1;
-}
-
-.setup-head {
-  align-items: flex-start;
-}
-
-.setup-grid {
-  display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
-  gap: 10px;
-}
-
-.setup-card {
-  min-height: 132px;
-  display: grid;
-  gap: 10px;
-  align-content: start;
-  padding: 14px;
-  border: 1px solid rgba(255, 255, 255, 0.08);
-  border-radius: 8px;
-  background:
-    linear-gradient(145deg, rgba(255, 255, 255, 0.055), rgba(255, 255, 255, 0.018)),
-    rgba(8, 5, 15, 0.54);
-}
-
-.setup-card p {
-  margin-bottom: 0;
-  color: var(--accent);
-  font-size: 0.74rem;
-  font-weight: 850;
-  text-transform: uppercase;
-}
-
-.setup-card code {
-  min-height: 42px;
-  display: block;
-  padding: 10px;
-  border: 1px solid rgba(255, 255, 255, 0.07);
-  border-radius: 8px;
-  background: rgba(0, 0, 0, 0.18);
-  color: var(--muted);
-  font-size: 0.82rem;
-  line-height: 1.35;
-  overflow-wrap: anywhere;
-}
-
-.setup-card .copy {
-  width: fit-content;
-  min-height: 34px;
 }
 
 .overview-grid {
@@ -814,7 +753,6 @@ select {
   .workspace,
   .edit-grid,
   .overview-grid,
-  .setup-grid,
   .report-grid {
     grid-template-columns: 1fr;
   }
