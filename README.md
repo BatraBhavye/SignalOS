@@ -41,15 +41,16 @@ Implemented:
 - Postpone, done/reopen, and delete workflows
 - Weekly report for completed, pending, overdue, and completion rate
 - iPhone Shortcut/webhook capture path
-- Phone-accessible local web app setup panel
-- `.ics` calendar export
+- Per-user tokenized `.ics` calendar feed
+- Optional per-user Google Calendar OAuth sync
+- Authenticated local AI bridge for hosted deployments
+- Smart AI fallback that skips Ollama on clear deterministic parses
 - Render + Neon free long-term deployment path
 - PWA manifest and service worker shell
 
 Not yet implemented:
 
 - OCR image upload for screenshots
-- Direct Google Calendar API sync
 - Push notifications
 - Automated regression test suite
 - Subtasks/progress workflow for larger tasks
@@ -60,7 +61,7 @@ Not yet implemented:
 - Data: SQLite
 - Frontend: HTML, CSS, vanilla JavaScript
 - Local AI: Ollama with `llama3.1:8b`
-- Calendar: ICS feed export
+- Calendar: per-user ICS feed, optional Google Calendar OAuth sync
 - Mobile bridge: local network web app and iPhone Shortcut webhook
 
 ## How The Extraction Works
@@ -68,9 +69,10 @@ Not yet implemented:
 SignalOS uses a hybrid extraction approach:
 
 1. Deterministic rules handle reliable baseline parsing.
-2. Ollama is used automatically when available for local GenAI extraction.
-3. The system merges model output with rule-based guardrails.
-4. The user reviews every candidate before saving.
+2. A smart fallback decides whether AI review is needed.
+3. Ollama runs only for uncertain, ambiguous, Hinglish, multi-action, or document-like input.
+4. The system merges model output with rule-based guardrails.
+5. The user reviews every candidate before saving.
 
 The deterministic layer currently handles:
 
@@ -92,7 +94,8 @@ SignalOS uses simple first-party authentication:
 - signed HTTP-only session cookies
 - each reminder and pending candidate belongs to one user
 - optional `MAX_USERS` cap for personal deployments
-- tokenized calendar and webhook URLs generated per user in the Sync setup panel
+- tokenized calendar and webhook URLs are generated per user through `/api/setup`
+- Google Calendar tokens are stored per user when optional Google sync is configured
 
 For a personal deployment, set `MAX_USERS=2` on Render to limit the instance to two accounts. The open-source default allows signups unless the deployer disables or limits them.
 
@@ -188,7 +191,9 @@ Open on laptop:
 http://127.0.0.1:8001
 ```
 
-For phone testing on the same Wi-Fi, open the phone URL shown in the in-app "Sync setup" panel.
+For local phone testing on the same Wi-Fi, open `http://YOUR-LAPTOP-LAN-IP:8001` on the phone while the local server is running.
+
+For hosted use, open the Render URL from phone or laptop. The app stores data in the configured central database, so both devices see the same reminders after signing into the same SignalOS account.
 
 ## Optional Local AI Setup
 
@@ -201,7 +206,7 @@ ollama pull llama3.1:8b
 ollama serve
 ```
 
-When Ollama is running, SignalOS automatically attempts local model extraction and validates/merges it with deterministic rules. If Ollama is unavailable or times out, the app falls back to rules.
+When Ollama is running, SignalOS uses it only when deterministic extraction looks uncertain or complex. Clear prompts stay fast with rules only. If Ollama is unavailable or times out, the app falls back to rules.
 
 ## Optional AI Bridge For Hosted App
 
@@ -334,6 +339,41 @@ https://your-render-url/api/calendar/google/callback
 
 Each SignalOS user connects their own Google account from the Calendar button in the app. SignalOS uses the `https://www.googleapis.com/auth/calendar.events` scope so it can create, update, and delete events for that connected user.
 
+## Calendar Options
+
+SignalOS is calendar-ready in two ways:
+
+### Free ICS Feed
+
+Every user has a private `.ics` feed URL protected by that user's API token. Calendar apps can subscribe to this URL without Google Cloud, OAuth, or billing.
+
+Use this when:
+
+- you want the no-spend MVP path
+- you only need SignalOS reminders to appear in a calendar
+- slower calendar refresh is acceptable
+
+Tradeoffs:
+
+- refresh timing is controlled by the calendar app
+- it is mostly one-way sync from SignalOS to calendar
+- Google Calendar may refresh subscribed feeds slowly
+
+### Optional Google Calendar Sync
+
+When Google OAuth is configured, each user can connect their own Google account. SignalOS then creates, updates, and removes events in that user's primary calendar when reminders change.
+
+Use this when:
+
+- you want faster and more direct calendar updates
+- each SignalOS user should connect their own calendar
+- you are comfortable configuring Google Cloud OAuth
+
+Tradeoffs:
+
+- Google Cloud may require billing verification
+- production OAuth publishing may require a Google consent-screen review depending on distribution
+
 ## API Overview
 
 Analyze text:
@@ -427,7 +467,10 @@ The database includes calendar sync metadata fields:
 ```text
 SignalOS/
 |-- server.py                 # FastAPI backend, extraction logic, API routes
+|-- ai_bridge.py              # Optional authenticated bridge to local Ollama
+|-- start_ai_bridge.example.bat # Template for a private local bridge launcher
 |-- requirements.txt          # Python dependencies
+|-- render.yaml               # Render Blueprint config
 |-- data/
 |   `-- signalos.db           # Local SQLite database
 |-- static/
@@ -444,19 +487,19 @@ SignalOS/
 Near-term:
 
 - Add OCR for screenshot/image uploads
-- Add direct Google Calendar API sync
 - Add extraction regression tests and benchmark examples
 - Add settings for default reminder time and notification method
-- Improve phone shortcut documentation
+- Improve phone shortcut and ICS subscription documentation
+- Add UI for copying private webhook and ICS URLs from settings
 
 Later:
 
 - Add PWA push notifications
 - Add subtasks for multi-step work
 - Bring back progress bars after the presentation MVP
-- Add hosted deployment option
-- Add user accounts or multi-device sync beyond local network mode
+- Add richer Google Calendar settings such as default calendar and reminder lead time
+- Add export/backup tooling for personal data
 
 ## Resume Summary
 
-Built SignalOS, a local-first GenAI/NLP action inbox that converts messy text, Hinglish prompts, receipt-like inputs, and multi-line notes into confirmed tasks, reminders, events, and calendar-ready actions using FastAPI, SQLite, deterministic NLP extraction, Ollama fallback/validation, and a human-in-the-loop confirmation workflow.
+Built SignalOS, a local-first GenAI/NLP action inbox that converts messy text, Hinglish prompts, receipt-like inputs, and multi-line notes into confirmed tasks, reminders, events, and calendar-ready actions using FastAPI, SQLite/Postgres, deterministic NLP extraction, smart Ollama fallback, per-user auth, tokenized webhooks, ICS feeds, optional Google Calendar sync, and a human-in-the-loop confirmation workflow.
