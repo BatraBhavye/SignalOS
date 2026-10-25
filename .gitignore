@@ -4,6 +4,7 @@ __pycache__/
 venv/
 env/
 .env
+.env.bridge.local
 .pytest_cache/
 .ruff_cache/
 data/*.db

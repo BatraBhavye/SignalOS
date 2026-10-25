@@ -220,10 +220,23 @@ On your laptop, start Ollama:
 ollama serve
 ```
 
-In a second terminal, run the bridge:
+Create a private bridge config:
 
 ```powershell
-$env:AI_BRIDGE_TOKEN="replace-with-a-long-random-secret"
+copy .env.bridge.example .env.bridge.local
+```
+
+Edit `.env.bridge.local` and replace `AI_BRIDGE_TOKEN` with a private random token of at least 32 characters. This file is ignored by Git.
+
+Then double-click:
+
+```text
+start_ai_bridge.bat
+```
+
+Or run the same bridge manually:
+
+```powershell
 python -m uvicorn ai_bridge:app --host 127.0.0.1 --port 8787
 ```
 
