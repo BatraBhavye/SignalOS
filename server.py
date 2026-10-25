@@ -1193,6 +1193,7 @@ def add_extraction_feedback(
     candidates: list[dict[str, Any]],
     ollama_error: str | None,
     used_ollama: bool,
+    rules_only_reason: str | None = None,
 ) -> list[dict[str, Any]]:
     for candidate in candidates:
         extractor = candidate.get("extractor", "rules")
@@ -1202,7 +1203,7 @@ def add_extraction_feedback(
             candidate["ai_feedback"] = "AI reviewed this extraction; deterministic rules kept dates and times precise."
             candidate["review_state"] = "ai_reviewed"
         elif not used_ollama:
-            candidate["ai_feedback"] = "Parsed with deterministic rules because AI review was disabled for this request."
+            candidate["ai_feedback"] = rules_only_reason or "Parsed with deterministic rules because AI review was disabled for this request."
             candidate["review_state"] = "rules_only"
         elif ollama_error and weak_rule_result:
             candidate["ai_feedback"] = "AI review was unavailable, and this rule-based result may need a closer check."
@@ -1279,10 +1280,44 @@ def parse_stored_datetime(value: str | None) -> datetime | None:
         return None
 
 
+def should_use_ai_review(text: str, rule_candidates: list[dict[str, Any]]) -> bool:
+    normalized = normalize_text(text)
+    lower = normalized.lower()
+    lines = [line.strip() for line in normalized.splitlines() if line.strip()]
+    has_document_shape = bool(
+        re.search(
+            r"\b(pnr|invoice|receipt|booking|boarding|seat|address|dear passenger|amount|transaction|order id)\b",
+            lower,
+        )
+    )
+    has_hinglish = bool(re.search(r"\b(kal|aaj|baje|padhna|dena|jana|karna|zaroori|jaruri)\b", lower))
+    has_multiple_actions = len(lines) > 1 or len(split_action_chunks(text)) > 1
+    has_uncertain_candidate = any(
+        float(item.get("confidence") or 0) < 0.82
+        or not item.get("due_at")
+        or str(item.get("title") or "").lower() in {"new reminder", "review captured note", "reminder", "task"}
+        for item in rule_candidates
+    )
+    return (
+        not rule_candidates
+        or has_uncertain_candidate
+        or has_multiple_actions
+        or has_hinglish
+        or has_document_shape
+    )
+
+
 def extract_candidates(text: str, now: datetime, source_type: str, use_ollama: bool = True) -> tuple[list[dict[str, Any]], str | None]:
     rule_candidates = rule_extract(text, now, source_type)
     if not use_ollama:
         return add_extraction_feedback(rule_candidates, None, False), None
+    if not should_use_ai_review(text, rule_candidates):
+        return add_extraction_feedback(
+            rule_candidates,
+            None,
+            False,
+            "Parsed with deterministic rules; AI review was skipped because the extraction was already clear.",
+        ), None
     try:
         ai_candidates = bridge_extract(text, now, source_type) if AI_BRIDGE_URL else ollama_extract(text, now, source_type)
         merged = merge_ollama_with_rules(
