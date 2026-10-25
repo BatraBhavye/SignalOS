@@ -427,8 +427,30 @@ select:focus {
   margin-bottom: 13px;
 }
 
+.chip-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
 .confidence-chip {
   color: var(--accent);
+}
+
+.review-chip[data-state="ai_reviewed"] {
+  color: var(--accent);
+  border-color: rgba(92, 225, 220, 0.28);
+  background: rgba(92, 225, 220, 0.08);
+}
+
+.review-chip[data-state="needs_ai_review"] {
+  color: #ffd28a;
+  border-color: rgba(255, 210, 138, 0.3);
+  background: rgba(255, 210, 138, 0.08);
+}
+
+.review-chip[data-state="rules_only"] {
+  color: var(--muted);
 }
 
 .edit-grid {

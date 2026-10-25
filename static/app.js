@@ -203,7 +203,16 @@ function renderCandidates(items, emptyMessage = "No actionable reminder was dete
     const node = template.content.firstElementChild.cloneNode(true);
     const recurrence = item.recurrence || { kind: "none", interval: 1 };
     const sourceLabel = item.pending_id ? sourceName(item.source_type) : item.reminder_type.replace("_", " ");
+    const reviewState = item.review_state || (String(item.extractor || "").includes("ollama") ? "ai_reviewed" : "rules_only");
+    const reviewLabel = {
+      ai_reviewed: "AI reviewed",
+      needs_ai_review: "Check carefully",
+      rules_only: "Rules only"
+    }[reviewState] || "Rules only";
     node.querySelector(".type-chip").textContent = sourceLabel;
+    const reviewChip = node.querySelector(".review-chip");
+    reviewChip.textContent = reviewLabel;
+    reviewChip.dataset.state = reviewState;
     node.querySelector(".confidence-chip").textContent = `${Math.round((item.confidence || 0) * 100)}% confidence`;
     node.querySelector(".edit-title").value = item.title || "";
     node.querySelector(".edit-type").value = item.reminder_type || "reminder";
@@ -211,7 +220,7 @@ function renderCandidates(items, emptyMessage = "No actionable reminder was dete
     node.querySelector(".edit-priority").value = item.priority || "medium";
     node.querySelector(".edit-recurrence").value = recurrence.kind || "none";
     node.querySelector(".edit-day").value = recurrence.day_of_month || "";
-    node.querySelector(".reason").textContent = item.source_reason || "SignalOS found action signals in the source text.";
+    node.querySelector(".reason").textContent = item.ai_feedback || item.source_reason || "SignalOS found action signals in the source text.";
     node.querySelector(".source").textContent = item.source_text ? `Source: "${item.source_text}"` : "";
     node.querySelector(".confirm").addEventListener("click", () => confirmCandidate(item, node));
     node.querySelector(".reject").addEventListener("click", async () => {

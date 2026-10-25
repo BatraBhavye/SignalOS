@@ -1143,6 +1143,36 @@ def merge_ollama_with_rules(ollama_items: list[dict[str, Any]], rule_items: list
     return merged
 
 
+def add_extraction_feedback(
+    candidates: list[dict[str, Any]],
+    ollama_error: str | None,
+    used_ollama: bool,
+) -> list[dict[str, Any]]:
+    for candidate in candidates:
+        extractor = candidate.get("extractor", "rules")
+        confidence = float(candidate.get("confidence") or 0)
+        weak_rule_result = confidence < 0.82 or not candidate.get("due_at")
+        if "ollama" in extractor:
+            candidate["ai_feedback"] = "AI reviewed this extraction; deterministic rules kept dates and times precise."
+            candidate["review_state"] = "ai_reviewed"
+        elif not used_ollama:
+            candidate["ai_feedback"] = "Parsed with deterministic rules because AI review was disabled for this request."
+            candidate["review_state"] = "rules_only"
+        elif ollama_error and weak_rule_result:
+            candidate["ai_feedback"] = "AI review was unavailable, and this rule-based result may need a closer check."
+            candidate["review_state"] = "needs_ai_review"
+        elif ollama_error:
+            candidate["ai_feedback"] = "AI review was unavailable, but deterministic signals were strong."
+            candidate["review_state"] = "rules_only"
+        elif used_ollama:
+            candidate["ai_feedback"] = "AI review completed; deterministic rules provided this structured candidate."
+            candidate["review_state"] = "ai_reviewed"
+        else:
+            candidate["ai_feedback"] = "Parsed with deterministic rules."
+            candidate["review_state"] = "rules_only"
+    return candidates
+
+
 def reminder_from_row(row: sqlite3.Row) -> dict[str, Any]:
     data = dict(row)
     data["recurrence"] = {
@@ -1206,14 +1236,15 @@ def parse_stored_datetime(value: str | None) -> datetime | None:
 def extract_candidates(text: str, now: datetime, source_type: str, use_ollama: bool = True) -> tuple[list[dict[str, Any]], str | None]:
     rule_candidates = rule_extract(text, now, source_type)
     if not use_ollama:
-        return rule_candidates, None
+        return add_extraction_feedback(rule_candidates, None, False), None
     try:
-        return merge_ollama_with_rules(
+        merged = merge_ollama_with_rules(
             ollama_extract(text, now, source_type),
             rule_candidates,
-        ), None
+        )
+        return add_extraction_feedback(merged, None, True), None
     except (urllib.error.URLError, TimeoutError, json.JSONDecodeError, ValueError) as exc:
-        return rule_candidates, str(exc)
+        return add_extraction_feedback(rule_candidates, str(exc), True), str(exc)
 
 
 def save_pending_candidates(candidates: list[dict[str, Any]], source_text: str, source_type: str, user_id: str) -> list[dict[str, Any]]:
