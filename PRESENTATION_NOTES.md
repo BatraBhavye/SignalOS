@@ -86,6 +86,16 @@ kal 8 baje gym chalna
 fees last date is 20 Oct, pay before end of day
 ```
 
+## Development Bug Log
+
+### Browser UTC vs IST Relative Time
+
+During hosted testing, the prompt `call my girl in an hour` produced a reminder around `10:28 AM` even though the device time was around `2:59 PM IST`.
+
+The browser was sending the current time as a UTC ISO timestamp through `toISOString()`, and the backend was stripping timezone information instead of converting that timestamp to IST first. This made relative expressions like `in an hour` calculate from UTC wall time instead of the user's local time.
+
+Fix: commit `818d064 fix: convert browser time to IST` updated `parse_now()` to convert timezone-aware timestamps to IST before deterministic time parsing. After the fix, `2026-10-25T09:29:00Z` is treated as `2026-10-25 2:59 PM IST`, so `in an hour` becomes `3:59 PM IST`.
+
 ## Future Scope
 
 - Screenshot OCR
