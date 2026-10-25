@@ -187,6 +187,32 @@ ollama serve
 
 When Ollama is running, SignalOS automatically attempts local model extraction and validates/merges it with deterministic rules. If Ollama is unavailable or times out, the app falls back to rules.
 
+## Free Online Deployment
+
+The recommended no-spend deployment path for the class/demo version is Render Free:
+
+- Render web service for the FastAPI app
+- Render Postgres for shared online storage
+- deterministic extraction online
+- Ollama remains a local-only enhancement unless a hosted model provider is added later
+
+This repository includes `render.yaml`, so Render can create the web service and database from the GitHub repo.
+
+Steps:
+
+1. Push the latest code to GitHub.
+2. Open Render and create a new Blueprint from the SignalOS repository.
+3. Render will read `render.yaml`.
+4. Choose the free plan for the web service and database.
+5. After deploy, open the public Render URL.
+
+Important free-tier limits:
+
+- the free web service can sleep after inactivity, so the first request may take about a minute
+- the free database is for demo use and may expire according to Render's current free-tier policy
+- local SQLite is still used when `DATABASE_URL` is not set
+- hosted deployment does not run your laptop's local Ollama instance
+
 ## API Overview
 
 Analyze text:

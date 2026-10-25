@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import os
 import re
 import socket
 import sqlite3
@@ -17,9 +18,17 @@ from fastapi.responses import FileResponse, Response
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
+try:
+    import psycopg
+    from psycopg.rows import dict_row
+except ImportError:  # Optional unless DATABASE_URL points to Postgres.
+    psycopg = None
+    dict_row = None
+
 
 BASE_DIR = Path(__file__).resolve().parent
 DB_PATH = BASE_DIR / "data" / "signalos.db"
+DATABASE_URL = os.getenv("DATABASE_URL", "")
 IST_OFFSET = "+05:30"
 
 ReminderType = Literal["reminder", "task", "event", "important_date", "note"]
@@ -81,14 +90,72 @@ class WebhookCapture(BaseModel):
     now: str | None = None
 
 
-def db() -> sqlite3.Connection:
-    conn = sqlite3.connect(DB_PATH)
-    conn.row_factory = sqlite3.Row
-    return conn
+def use_postgres() -> bool:
+    return DATABASE_URL.startswith(("postgres://", "postgresql://"))
 
 
-def ensure_columns(conn: sqlite3.Connection) -> None:
-    existing = {row["name"] for row in conn.execute("PRAGMA table_info(reminders)").fetchall()}
+class Database:
+    def __init__(self) -> None:
+        self.is_postgres = use_postgres()
+        if self.is_postgres:
+            if psycopg is None:
+                raise RuntimeError("psycopg is required when DATABASE_URL uses Postgres.")
+            self.conn = psycopg.connect(DATABASE_URL, row_factory=dict_row)
+        else:
+            conn = sqlite3.connect(DB_PATH)
+            conn.row_factory = sqlite3.Row
+            self.conn = conn
+
+    def __enter__(self) -> "Database":
+        return self
+
+    def __exit__(self, exc_type: object, exc: object, traceback: object) -> None:
+        if exc_type is None:
+            self.conn.commit()
+        else:
+            self.conn.rollback()
+        self.conn.close()
+
+    def execute(self, sql: str, params: tuple[Any, ...] | list[Any] = ()) -> Any:
+        if self.is_postgres:
+            sql = sql.replace("?", "%s")
+        return self.conn.execute(sql, params)
+
+
+def db() -> Database:
+    if not use_postgres():
+        DB_PATH.parent.mkdir(parents=True, exist_ok=True)
+    return Database()
+
+
+def database_label() -> str:
+    return "postgres" if use_postgres() else "sqlite"
+
+
+def sqlite_table_columns(conn: Database, table: str) -> set[str]:
+    return {row["name"] for row in conn.execute(f"PRAGMA table_info({table})").fetchall()}
+
+
+def postgres_table_columns(conn: Database, table: str) -> set[str]:
+    rows = conn.execute(
+        """
+        SELECT column_name AS name
+        FROM information_schema.columns
+        WHERE table_schema = 'public' AND table_name = ?
+        """,
+        (table,),
+    ).fetchall()
+    return {row["name"] for row in rows}
+
+
+def table_columns(conn: Database, table: str) -> set[str]:
+    if conn.is_postgres:
+        return postgres_table_columns(conn, table)
+    return sqlite_table_columns(conn, table)
+
+
+def ensure_columns(conn: Database) -> None:
+    existing = table_columns(conn, "reminders")
     columns = {
         "source_type": "TEXT NOT NULL DEFAULT 'text'",
         "extractor": "TEXT NOT NULL DEFAULT 'manual'",
@@ -115,7 +182,6 @@ def ensure_columns(conn: sqlite3.Connection) -> None:
 
 
 def init_db() -> None:
-    DB_PATH.parent.mkdir(parents=True, exist_ok=True)
     with db() as conn:
         conn.execute(
             """
@@ -995,9 +1061,12 @@ def detect_lan_ip() -> str | None:
 def setup_urls(request: Request) -> dict[str, str]:
     request_host = request.headers.get("host", "127.0.0.1:8001")
     port = request_host.rsplit(":", 1)[1] if ":" in request_host else "8001"
+    scheme = request.headers.get("x-forwarded-proto", request.url.scheme)
+    public_origin = os.getenv("RENDER_EXTERNAL_URL")
     lan_ip = detect_lan_ip()
-    laptop_origin = f"{request.url.scheme}://{request_host}"
-    phone_origin = f"http://{lan_ip}:{port}" if lan_ip else laptop_origin
+    laptop_origin = public_origin or f"{scheme}://{request_host}"
+    is_local_host = request_host.startswith(("127.0.0.1", "localhost", "0.0.0.0"))
+    phone_origin = f"http://{lan_ip}:{port}" if is_local_host and lan_ip else laptop_origin
     return {
         "laptop_url": laptop_origin,
         "phone_url": phone_origin,
@@ -1032,6 +1101,7 @@ def setup(request: Request) -> dict[str, Any]:
         },
         "calendar_provider": "ics",
         "calendar_sync_status": "ready_for_feed",
+        "database": database_label(),
     }
 
 
