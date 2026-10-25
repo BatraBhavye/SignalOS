@@ -11,7 +11,7 @@ import socket
 import sqlite3
 import urllib.error
 import urllib.request
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Literal
 from uuid import uuid4
@@ -34,6 +34,7 @@ BASE_DIR = Path(__file__).resolve().parent
 DB_PATH = BASE_DIR / "data" / "signalos.db"
 DATABASE_URL = os.getenv("DATABASE_URL", "")
 IST_OFFSET = "+05:30"
+IST = timezone(timedelta(hours=5, minutes=30))
 SESSION_COOKIE = "signalos_session"
 SESSION_SECRET = os.getenv("SESSION_SECRET", "signalos-dev-session-secret-change-me")
 MAX_USERS = int(os.getenv("MAX_USERS", "0") or "0")
@@ -376,11 +377,14 @@ def init_db() -> None:
 
 def parse_now(raw_now: str | None) -> datetime:
     if not raw_now:
-        return datetime.now()
+        return datetime.now(IST).replace(tzinfo=None)
     try:
-        return datetime.fromisoformat(raw_now.replace("Z", "+00:00")).replace(tzinfo=None)
+        parsed = datetime.fromisoformat(raw_now.replace("Z", "+00:00"))
+        if parsed.tzinfo is not None:
+            parsed = parsed.astimezone(IST)
+        return parsed.replace(tzinfo=None)
     except ValueError:
-        return datetime.now()
+        return datetime.now(IST).replace(tzinfo=None)
 
 
 TEXT_REPLACEMENTS = {
