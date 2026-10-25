@@ -224,7 +224,7 @@ In a second terminal, run the bridge:
 
 ```powershell
 $env:AI_BRIDGE_TOKEN="replace-with-a-long-random-secret"
-python -m uvicorn ai_bridge:app --host 0.0.0.0 --port 8787
+python -m uvicorn ai_bridge:app --host 127.0.0.1 --port 8787
 ```
 
 Expose port `8787` with a secure tunnel such as Cloudflare Tunnel, Tailscale Funnel, or ngrok. Then set these environment variables on Render:
@@ -236,6 +236,25 @@ OLLAMA_MODEL=llama3.1:8b
 ```
 
 The SignalOS UI shows `AI bridge online` when the bridge is reachable. If it shows `AI offline, rules active`, reminders still work with deterministic extraction.
+
+Bridge safety checklist:
+
+- use HTTPS tunnel URLs only
+- keep `ai_bridge.py` bound to `127.0.0.1`
+- never expose Ollama port `11434` directly
+- use a random `AI_BRIDGE_TOKEN` with at least 32 characters
+- keep the same token only in your laptop environment and Render environment variables
+- rotate the token if it is ever pasted somewhere public
+- stop the bridge when you do not want the hosted app to use laptop AI
+- leave deterministic rules enabled so the hosted app works when the bridge is offline
+
+Optional bridge limit:
+
+```text
+AI_BRIDGE_RATE_LIMIT=30
+```
+
+This limits bridge calls per client per minute before the request reaches Ollama.
 
 ## Free Long-Term Deployment
 
