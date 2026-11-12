@@ -1,0 +1,4 @@
+pytest
+httpx
+ruff
+-r mcp-ci-doctor/requirements.txt
