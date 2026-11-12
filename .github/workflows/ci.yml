@@ -98,3 +98,4 @@ jobs:
       - name: Evaluate container scan against security gate policy
         run: |
           opa eval --fail-defined --format pretty -i trivy-results.json -d policies/ 'data.signalos.security.deny[_]'
+
