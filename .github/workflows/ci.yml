@@ -82,3 +82,15 @@ jobs:
           name: trivy-results
           path: trivy-results.json
           retention-days: 7
+
+      - name: Setup Open Policy Agent (OPA)
+        uses: open-policy-agent/setup-opa@v2
+        with:
+          version: 'latest'
+
+      - name: Test OPA security policies
+        run: opa test policies/ -v
+
+      - name: Evaluate container scan against security gate policy
+        run: |
+          opa eval --fail-defined -d policies/trivy_security.rego -i trivy-results.json "data.signalos.security.deny[x]"
