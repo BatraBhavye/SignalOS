@@ -34,6 +34,9 @@ jobs:
       - name: Run linter
         run: ruff check .
 
+      - name: Lint shell scripts
+        run: shellcheck scripts/*.sh
+
       - name: Run test suite
         run: pytest tests/ -v
 
@@ -51,6 +54,19 @@ jobs:
       - name: Build Docker image locally
         run: docker build -t signalos:ci .
 
+      - name: Run container smoke test
+        run: |
+          docker run -d --name signalos-smoke -p 8000:8000 -e SESSION_SECRET=ci-smoke-test-secret-key-32-chars signalos:ci
+          if ! bash scripts/healthcheck.sh http://127.0.0.1:8000/health; then
+            echo "Smoke test healthcheck failed! Printing container logs:" >&2
+            docker logs signalos-smoke >&2
+            exit 1
+          fi
+
+      - name: Clean up smoke test container
+        if: always()
+        run: docker rm -f signalos-smoke
+
       - name: Scan Docker image with Trivy
         uses: aquasecurity/trivy-action@0.29.0
         with:
@@ -66,4 +82,3 @@ jobs:
           name: trivy-results
           path: trivy-results.json
           retention-days: 7
-
