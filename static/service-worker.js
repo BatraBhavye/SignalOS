@@ -1,4 +1,4 @@
-const CACHE_NAME = "signalos-shell-v1";
+const CACHE_NAME = "signalos-shell-v2";
 const APP_SHELL = [
   "/",
   "/static/styles.css",

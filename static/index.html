@@ -3,7 +3,7 @@
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <meta name="theme-color" content="#13091f" />
+    <meta name="theme-color" content="#0d0817" />
     <title>SignalOS</title>
     <link rel="manifest" href="/manifest.webmanifest" />
     <link rel="stylesheet" href="/static/styles.css" />
@@ -41,31 +41,42 @@
       <header class="topbar">
         <div class="brand-lockup">
           <div class="mark">S</div>
-          <div>
-            <p class="eyebrow">Local-first action inbox</p>
-            <h1>SignalOS</h1>
-            <p class="tagline">Capture, confirm, and calendar your real-life commitments.</p>
+          <div class="brand-text">
+            <h1 class="brand-name">SignalOS</h1>
           </div>
         </div>
         <div class="top-actions">
-          <button id="calendarBtn" class="icon-link" type="button" title="Connect Google Calendar">Calendar</button>
-          <span id="userPill" class="system-pill subtle-pill">signed in</span>
-          <span id="aiStatusPill" class="system-pill subtle-pill" data-state="checking"><span></span> AI checking</span>
-          <button id="logoutBtn" class="secondary" type="button">Logout</button>
-          <span class="system-pill"><span></span> Phone inbox ready</span>
+          <span id="aiStatusPill" class="ai-status-dot" role="status" aria-label="AI bridge status" data-state="checking" title="AI bridge: Checking status..."></span>
+          <div class="avatar-menu-wrapper">
+            <button id="avatarBtn" class="avatar-btn" type="button" aria-haspopup="true" aria-expanded="false" title="Account menu">
+              <span id="avatarInitial" class="avatar-initial">U</span>
+            </button>
+            <div id="avatarMenu" class="avatar-dropdown hidden" role="menu">
+              <div class="avatar-user-info">
+                <span class="avatar-user-label">Signed in as</span>
+                <span id="userPill" class="avatar-username">signed in</span>
+              </div>
+              <div class="menu-divider"></div>
+              <a href="/api/setup" target="_blank" class="menu-item" id="adminMenuLink" role="menuitem">Admin</a>
+              <button id="calendarBtn" class="menu-item" type="button" role="menuitem">Calendar feed</button>
+              <div class="menu-divider"></div>
+              <button id="logoutBtn" class="menu-item menu-item-danger" type="button" role="menuitem">Logout</button>
+            </div>
+          </div>
         </div>
       </header>
 
+      <!-- Capture & Confirmation surface -->
       <section class="workspace">
         <section class="capture-surface">
           <div class="section-head">
             <div>
               <p class="eyebrow">Capture</p>
-              <h2>Turn messy input into confirmed action.</h2>
+              <h2>Turn messy text into confirmed action.</h2>
             </div>
           </div>
 
-          <textarea id="inputText" spellcheck="false" placeholder="Paste a message, college notice, instruction, OCR text, or something like: my anniversary is on the 16th of every month"></textarea>
+          <textarea id="inputText" spellcheck="false" placeholder="Paste a message, notice, instruction, OCR text, or type: e.g. dentist appointment tomorrow 10am"></textarea>
 
           <div class="input-tools">
             <label class="file-button">
@@ -86,73 +97,29 @@
             </div>
             <span id="pendingBadge" class="system-pill subtle-pill">0 pending</span>
           </div>
-          <div id="candidateList" class="empty-state">
-            Your confirmation inbox is clear.
+          <div id="candidateList" class="empty-state example-inbox">
+            <p class="empty-hint">Paste notes, messages, or deadlines above to extract actions. Or try an example:</p>
+            <div class="example-chips">
+              <button type="button" class="example-chip" data-example="Submit project report tomorrow at 5pm">
+                Submit project report tomorrow at 5pm
+              </button>
+              <button type="button" class="example-chip" data-example="Dentist appointment next Monday at 10am">
+                Dentist appointment next Monday at 10am
+              </button>
+              <button type="button" class="example-chip" data-example="Pay rent every month on the 5th">
+                Pay rent every month on the 5th
+              </button>
+            </div>
           </div>
         </section>
       </section>
 
-      <section class="overview-grid" aria-label="Reminder overview">
-        <article class="metric-card">
-          <p>Next</p>
-          <h3 id="nextDueTitle">No upcoming item</h3>
-          <span id="nextDueTime">Add a reminder to begin</span>
-        </article>
-        <article class="metric-card">
-          <p>Inbox</p>
-          <h3 id="pendingCount">0</h3>
-          <span>waiting for confirmation</span>
-        </article>
-        <article class="metric-card">
-          <p>Today</p>
-          <h3 id="todayCount">0</h3>
-          <span>scheduled actions</span>
-        </article>
-        <article class="metric-card">
-          <p>Important dates</p>
-          <h3 id="importantCount">0</h3>
-          <span>birthdays, anniversaries, deadlines</span>
-        </article>
-        <article class="metric-card">
-          <p>Recurring</p>
-          <h3 id="recurringCount">0</h3>
-          <span>habits and repeated dates</span>
-        </article>
-      </section>
-
-      <section class="report-panel" aria-label="Weekly task report">
-        <div class="section-head report-head">
-          <div>
-            <p class="eyebrow">Weekly report</p>
-            <h2>Track what moved, what slipped, and what still needs attention.</h2>
-          </div>
-          <span id="reportWeek" class="system-pill subtle-pill">this week</span>
-        </div>
-        <div class="report-grid">
-          <article>
-            <span>Completed</span>
-            <strong id="completedWeek">0</strong>
-          </article>
-          <article>
-            <span>Pending</span>
-            <strong id="pendingWeek">0</strong>
-          </article>
-          <article>
-            <span>Overdue</span>
-            <strong id="overdueWeek">0</strong>
-          </article>
-          <article>
-            <span>Completion</span>
-            <strong id="completionRate">0%</strong>
-          </article>
-        </div>
-      </section>
-
-      <section class="timeline-panel">
+      <!-- Primary Timeline directly below capture box -->
+      <section class="timeline-panel" aria-label="Reminder timeline">
         <div class="section-head timeline-head">
           <div>
             <p class="eyebrow">Timeline</p>
-            <h2>Confirmed reminders and important dates.</h2>
+            <h2>Confirmed commitments</h2>
           </div>
           <div class="timeline-actions">
             <div class="segment" role="tablist" aria-label="Reminder filters">
@@ -165,6 +132,66 @@
           </div>
         </div>
         <div id="reminderList" class="timeline-list"></div>
+      </section>
+
+      <!-- Collapsed Weekly Report into a compact summary strip -->
+      <section class="report-panel compact-strip" aria-label="Weekly task report">
+        <div class="strip-header">
+          <div class="strip-title-group">
+            <span class="strip-title">Weekly summary</span>
+            <span id="reportWeek" class="system-pill subtle-pill">this week</span>
+          </div>
+        </div>
+        <div class="report-strip-stats">
+          <div class="stat-item">
+            <span class="stat-label">Completed</span>
+            <strong id="completedWeek" class="stat-val">0</strong>
+          </div>
+          <div class="stat-divider"></div>
+          <div class="stat-item">
+            <span class="stat-label">Pending</span>
+            <strong id="pendingWeek" class="stat-val">0</strong>
+          </div>
+          <div class="stat-divider"></div>
+          <div class="stat-item">
+            <span class="stat-label">Overdue</span>
+            <strong id="overdueWeek" class="stat-val">0</strong>
+          </div>
+          <div class="stat-divider"></div>
+          <div class="stat-item">
+            <span class="stat-label">Completion</span>
+            <strong id="completionRate" class="stat-val">0%</strong>
+          </div>
+        </div>
+      </section>
+
+      <!-- Overview metrics strip -->
+      <section class="overview-grid compact-overview" aria-label="Reminder overview">
+        <article class="metric-card next-item-card">
+          <p>Next up</p>
+          <h3 id="nextDueTitle">No upcoming item</h3>
+          <span id="nextDueTime">Add a reminder to begin</span>
+        </article>
+        <article class="metric-card">
+          <p>Inbox</p>
+          <h3 id="pendingCount">0</h3>
+          <span>waiting to confirm</span>
+        </article>
+        <article class="metric-card">
+          <p>Today</p>
+          <h3 id="todayCount">0</h3>
+          <span>due today</span>
+        </article>
+        <article class="metric-card">
+          <p>Important</p>
+          <h3 id="importantCount">0</h3>
+          <span>dates & deadlines</span>
+        </article>
+        <article class="metric-card">
+          <p>Recurring</p>
+          <h3 id="recurringCount">0</h3>
+          <span>repeated habits</span>
+        </article>
       </section>
     </main>
 

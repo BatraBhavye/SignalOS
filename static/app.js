@@ -10,6 +10,9 @@ const signupBtn = document.querySelector("#signupBtn");
 const logoutBtn = document.querySelector("#logoutBtn");
 const userPill = document.querySelector("#userPill");
 const aiStatusPill = document.querySelector("#aiStatusPill");
+const avatarBtn = document.querySelector("#avatarBtn");
+const avatarMenu = document.querySelector("#avatarMenu");
+const avatarInitial = document.querySelector("#avatarInitial");
 const calendarBtn = document.querySelector("#calendarBtn");
 const analyzeBtn = document.querySelector("#analyzeBtn");
 const candidateList = document.querySelector("#candidateList");
@@ -36,6 +39,12 @@ let remindersCache = [];
 let pendingCache = [];
 let currentUser = null;
 let calendarState = { configured: false, connected: false };
+
+const EXAMPLE_PROMPTS = [
+  "Submit project report tomorrow at 5pm",
+  "Dentist appointment next Monday at 10am",
+  "Pay rent every month on the 5th"
+];
 
 function formatDate(value) {
   if (!value) return "No deadline detected";
@@ -100,7 +109,11 @@ function showAuth(message = "", isError = false) {
 
 function showApp(user) {
   currentUser = user;
-  userPill.textContent = user?.username || "signed in";
+  const name = user?.username || "signed in";
+  if (userPill) userPill.textContent = name;
+  if (avatarInitial) {
+    avatarInitial.textContent = name.charAt(0).toUpperCase();
+  }
   authView.classList.add("hidden");
   appShell.classList.remove("hidden");
 }
@@ -140,8 +153,33 @@ function reminderDescription(reminder) {
 }
 
 function setEmpty(message) {
-  candidateList.className = "empty-state";
-  candidateList.textContent = message;
+  const isStatusOrError = message && (
+    message.includes("Running") ||
+    message.includes("failed") ||
+    message.includes("Analyzing")
+  );
+
+  if (isStatusOrError) {
+    candidateList.className = "empty-state";
+    candidateList.textContent = message;
+    return;
+  }
+
+  const hint = message && message !== "Your confirmation inbox is clear." && message !== "No pending confirmations."
+    ? message
+    : "Paste notes, messages, or deadlines above to extract actions. Or try an example:";
+
+  candidateList.className = "empty-state example-inbox";
+  candidateList.innerHTML = `
+    <p class="empty-hint">${escapeHtml(hint)}</p>
+    <div class="example-chips">
+      ${EXAMPLE_PROMPTS.map((ex) => `
+        <button type="button" class="example-chip" data-example="${escapeHtml(ex)}">
+          ${escapeHtml(ex)}
+        </button>
+      `).join("")}
+    </div>
+  `;
 }
 
 function updatePendingCount() {
@@ -286,6 +324,25 @@ function groupForReminder(reminder) {
   return "scheduled";
 }
 
+function getReminderTimelineCategory(reminder) {
+  if (!reminder.due_at) return "upcoming";
+  const due = new Date(reminder.due_at);
+  if (Number.isNaN(due.getTime())) return "upcoming";
+  const now = new Date();
+  const endOfToday = new Date(now.getFullYear(), now.getMonth(), now.getDate(), 23, 59, 59, 999);
+
+  if (reminder.status !== "completed" && due < now) {
+    return "overdue";
+  }
+  if (isToday(reminder.due_at)) {
+    return "today";
+  }
+  if (due > endOfToday) {
+    return "upcoming";
+  }
+  return "upcoming";
+}
+
 function filteredReminders() {
   if (activeFilter === "all") return remindersCache;
   if (activeFilter === "recurring") {
@@ -311,56 +368,172 @@ function renderOverview() {
   updatePendingCount();
 }
 
+function createReminderCard(reminder) {
+  const card = document.createElement("article");
+  card.className = `reminder ${groupForReminder(reminder)} ${reminder.priority}`;
+  card.innerHTML = `
+    <div class="reminder-main">
+      <div class="reminder-row">
+        <span class="chip priority-chip">${escapeHtml(reminder.priority)}</span>
+        <span class="chip type-chip">${escapeHtml(reminder.reminder_type.replace("_", " "))}</span>
+        <span class="chip recurrence-chip">${escapeHtml(recurrenceLabel(reminder.recurrence))}</span>
+      </div>
+      <h3>${escapeHtml(reminder.title)}</h3>
+      <p class="meta">${formatDate(reminder.due_at)} | ${escapeHtml(reminder.status)}</p>
+      <p class="reminder-description">${escapeHtml(reminderDescription(reminder))}</p>
+    </div>
+    <div class="reminder-actions">
+      <button class="complete primary-done-btn" type="button">${reminder.status === "completed" ? "Reopen" : "Done"}</button>
+      <div class="reminder-menu-wrapper">
+        <button class="more-btn icon-only" type="button" aria-haspopup="true" aria-expanded="false" title="More options" aria-label="More options">
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
+            <circle cx="5" cy="12" r="2.2"/>
+            <circle cx="12" cy="12" r="2.2"/>
+            <circle cx="19" cy="12" r="2.2"/>
+          </svg>
+        </button>
+        <div class="reminder-menu-dropdown hidden" role="menu">
+          <button class="postpone-tomorrow menu-item" type="button" role="menuitem">Tomorrow</button>
+          <button class="postpone-week menu-item" type="button" role="menuitem">Next week</button>
+          <div class="menu-divider"></div>
+          <button class="delete menu-item menu-item-danger danger" type="button" role="menuitem">Delete</button>
+        </div>
+      </div>
+    </div>
+  `;
+
+  card.tabIndex = 0;
+  card.title = "Click to expand details";
+  card.addEventListener("click", (event) => {
+    if (event.target.closest("button") || event.target.closest(".reminder-menu-dropdown")) return;
+    card.classList.toggle("expanded");
+  });
+
+  const moreBtn = card.querySelector(".more-btn");
+  const menuDropdown = card.querySelector(".reminder-menu-dropdown");
+  if (moreBtn && menuDropdown) {
+    moreBtn.addEventListener("click", (e) => {
+      e.stopPropagation();
+      document.querySelectorAll(".reminder-menu-dropdown:not(.hidden)").forEach((m) => {
+        if (m !== menuDropdown) {
+          m.classList.add("hidden");
+          m.parentElement.querySelector(".more-btn")?.setAttribute("aria-expanded", "false");
+        }
+      });
+      const isHidden = menuDropdown.classList.contains("hidden");
+      menuDropdown.classList.toggle("hidden", !isHidden);
+      moreBtn.setAttribute("aria-expanded", String(isHidden));
+    });
+  }
+
+  card.querySelector(".complete").addEventListener("click", async (e) => {
+    e.stopPropagation();
+    await updateReminder(reminder.id, { status: reminder.status === "completed" ? "scheduled" : "completed" });
+  });
+
+  card.querySelector(".postpone-tomorrow").addEventListener("click", async (e) => {
+    e.stopPropagation();
+    menuDropdown?.classList.add("hidden");
+    await updateReminder(reminder.id, { due_at: shiftDueDate(reminder.due_at, 1), status: "scheduled" });
+  });
+
+  card.querySelector(".postpone-week").addEventListener("click", async (e) => {
+    e.stopPropagation();
+    menuDropdown?.classList.add("hidden");
+    await updateReminder(reminder.id, { due_at: shiftDueDate(reminder.due_at, 7), status: "scheduled" });
+  });
+
+  card.querySelector(".delete").addEventListener("click", async (e) => {
+    e.stopPropagation();
+    menuDropdown?.classList.add("hidden");
+    await apiFetch(`/api/reminders/${reminder.id}`, { method: "DELETE" });
+    await loadReminders();
+    await loadWeeklyReport();
+  });
+
+  return card;
+}
+
 function renderReminders() {
   renderOverview();
   const reminders = filteredReminders();
   reminderList.innerHTML = "";
+
   if (!reminders.length) {
     reminderList.innerHTML = '<div class="empty-state timeline-empty">No reminders in this view.</div>';
     return;
   }
+
+  const overdueList = [];
+  const todayList = [];
+  const upcomingList = [];
+
   for (const reminder of reminders) {
-    const card = document.createElement("article");
-    card.className = `reminder ${groupForReminder(reminder)} ${reminder.priority}`;
-    card.innerHTML = `
-      <div class="reminder-main">
-        <div class="reminder-row">
-          <span class="chip">${escapeHtml(reminder.priority)}</span>
-          <span class="chip">${escapeHtml(reminder.reminder_type.replace("_", " "))}</span>
-          <span class="chip">${escapeHtml(recurrenceLabel(reminder.recurrence))}</span>
-        </div>
-        <h3>${escapeHtml(reminder.title)}</h3>
-        <p class="meta">${formatDate(reminder.due_at)} | ${escapeHtml(reminder.status)}</p>
-        <p class="reminder-description">${escapeHtml(reminderDescription(reminder))}</p>
-      </div>
-      <div class="reminder-actions">
-        <button class="complete secondary" type="button">${reminder.status === "completed" ? "Reopen" : "Done"}</button>
-        <button class="postpone-tomorrow secondary" type="button">Tomorrow</button>
-        <button class="postpone-week secondary" type="button">Next week</button>
-        <button class="delete danger" type="button">Delete</button>
+    const category = getReminderTimelineCategory(reminder);
+    if (category === "overdue") {
+      overdueList.push(reminder);
+    } else if (category === "today") {
+      todayList.push(reminder);
+    } else {
+      upcomingList.push(reminder);
+    }
+  }
+
+  const sortByDue = (a, b) => {
+    if (!a.due_at && !b.due_at) return 0;
+    if (!a.due_at) return 1;
+    if (!b.due_at) return -1;
+    return new Date(a.due_at) - new Date(b.due_at);
+  };
+
+  overdueList.sort(sortByDue);
+  todayList.sort(sortByDue);
+  upcomingList.sort(sortByDue);
+
+  const groups = [
+    { key: "overdue", title: "Overdue", items: overdueList, badgeClass: "overdue-badge" },
+    { key: "today", title: "Today", items: todayList, badgeClass: "today-badge" },
+    { key: "upcoming", title: "Upcoming", items: upcomingList, badgeClass: "upcoming-badge" }
+  ];
+
+  for (const group of groups) {
+    if (group.key === "overdue" && group.items.length === 0) {
+      continue;
+    }
+
+    if (group.key === "today" && group.items.length === 0 && upcomingList.length === 0 && overdueList.length > 0) {
+      continue;
+    }
+
+    const groupSection = document.createElement("section");
+    groupSection.className = `timeline-group timeline-group-${group.key}`;
+
+    const groupHead = document.createElement("div");
+    groupHead.className = "timeline-group-header";
+    groupHead.innerHTML = `
+      <div class="timeline-group-title-wrap">
+        <h3 class="timeline-group-title">${group.title}</h3>
+        <span class="timeline-group-badge ${group.badgeClass}">${group.items.length}</span>
       </div>
     `;
-    card.tabIndex = 0;
-    card.title = "Click to expand details";
-    card.addEventListener("click", (event) => {
-      if (event.target.closest("button")) return;
-      card.classList.toggle("expanded");
-    });
-    card.querySelector(".complete").addEventListener("click", async () => {
-      await updateReminder(reminder.id, { status: reminder.status === "completed" ? "scheduled" : "completed" });
-    });
-    card.querySelector(".postpone-tomorrow").addEventListener("click", async () => {
-      await updateReminder(reminder.id, { due_at: shiftDueDate(reminder.due_at, 1), status: "scheduled" });
-    });
-    card.querySelector(".postpone-week").addEventListener("click", async () => {
-      await updateReminder(reminder.id, { due_at: shiftDueDate(reminder.due_at, 7), status: "scheduled" });
-    });
-    card.querySelector(".delete").addEventListener("click", async () => {
-      await apiFetch(`/api/reminders/${reminder.id}`, { method: "DELETE" });
-      await loadReminders();
-      await loadWeeklyReport();
-    });
-    reminderList.appendChild(card);
+    groupSection.appendChild(groupHead);
+
+    const groupCards = document.createElement("div");
+    groupCards.className = "timeline-group-cards";
+
+    if (group.items.length === 0) {
+      const emptyNote = document.createElement("div");
+      emptyNote.className = "timeline-group-empty";
+      emptyNote.textContent = group.key === "today" ? "All clear for today." : "No upcoming reminders.";
+      groupCards.appendChild(emptyNote);
+    } else {
+      for (const item of group.items) {
+        groupCards.appendChild(createReminderCard(item));
+      }
+    }
+
+    groupSection.appendChild(groupCards);
+    reminderList.appendChild(groupSection);
   }
 }
 
@@ -398,6 +571,8 @@ async function loadPendingCandidates() {
   updatePendingCount();
   if (pendingCache.length) {
     renderCandidates(pendingCache);
+  } else {
+    setEmpty();
   }
 }
 
@@ -409,11 +584,11 @@ async function loadSetup() {
     const aiMode = setup.ai?.mode === "bridge" ? "AI bridge" : "Local AI";
     if (setup.ai?.online) {
       aiStatusPill.textContent = `${aiMode} online`;
-      aiStatusPill.title = `${aiMode} is reachable. SignalOS can use AI review.`;
+      aiStatusPill.title = `${aiMode} online. SignalOS can use AI review.`;
       aiStatusPill.dataset.state = "online";
     } else {
       aiStatusPill.textContent = `${aiMode} offline, rules active`;
-      aiStatusPill.title = `${aiMode} is not reachable from this server. SignalOS is still online with deterministic rules.`;
+      aiStatusPill.title = `${aiMode} offline (rules active). SignalOS is using deterministic parser.`;
       aiStatusPill.dataset.state = "offline";
     }
   } catch (error) {
@@ -530,7 +705,9 @@ authForm.addEventListener("submit", (event) => {
   submitAuth("login");
 });
 signupBtn.addEventListener("click", () => submitAuth("signup"));
+
 logoutBtn.addEventListener("click", async () => {
+  if (avatarMenu) avatarMenu.classList.add("hidden");
   await fetch("/api/auth/logout", { method: "POST", credentials: "same-origin" });
   remindersCache = [];
   pendingCache = [];
@@ -538,7 +715,9 @@ logoutBtn.addEventListener("click", async () => {
   setEmpty("Sign in to continue.");
   showAuth("Signed out.");
 });
+
 calendarBtn.addEventListener("click", async () => {
+  if (avatarMenu) avatarMenu.classList.add("hidden");
   if (!calendarState.configured) {
     window.location.href = "/api/calendar.ics";
     return;
@@ -556,11 +735,44 @@ calendarBtn.addEventListener("click", async () => {
     calendarBtn.disabled = false;
   }
 });
+
 fileInput.addEventListener("change", async (event) => {
   const file = event.target.files?.[0];
   if (!file) return;
   inputText.value = await file.text();
 });
+
+// Clickable example chips
+candidateList.addEventListener("click", (event) => {
+  const chip = event.target.closest(".example-chip");
+  if (!chip) return;
+  const exampleText = chip.dataset.example || chip.textContent.trim();
+  inputText.value = exampleText;
+  inputText.focus();
+});
+
+// Avatar menu toggle and outside click handling
+if (avatarBtn && avatarMenu) {
+  avatarBtn.addEventListener("click", (e) => {
+    e.stopPropagation();
+    const isHidden = avatarMenu.classList.contains("hidden");
+    avatarMenu.classList.toggle("hidden", !isHidden);
+    avatarBtn.setAttribute("aria-expanded", String(isHidden));
+  });
+
+  document.addEventListener("click", (e) => {
+    if (!avatarMenu.contains(e.target) && e.target !== avatarBtn) {
+      avatarMenu.classList.add("hidden");
+      avatarBtn.setAttribute("aria-expanded", "false");
+    }
+    if (!e.target.closest(".reminder-menu-wrapper")) {
+      document.querySelectorAll(".reminder-menu-dropdown:not(.hidden)").forEach((m) => {
+        m.classList.add("hidden");
+        m.parentElement.querySelector(".more-btn")?.setAttribute("aria-expanded", "false");
+      });
+    }
+  });
+}
 
 if ("serviceWorker" in navigator) {
   navigator.serviceWorker.register("/static/service-worker.js").catch(() => {});
