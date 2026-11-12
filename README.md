@@ -7,11 +7,7 @@
 ![PostgreSQL](https://img.shields.io/badge/PostgreSQL-15-4169E1.svg?logo=postgresql&logoColor=white)
 ![Model Context Protocol](https://img.shields.io/badge/MCP-1.2.0+-8A2BE2.svg)
 
-SignalOS is a local-first GenAI/NLP action inbox that turns messy real-world text into confirmed reminders, tasks, events, notes, and important dates.
-
 A local-first NLP action inbox that turns messy text (WhatsApp-style messages, Hinglish shorthand, receipts) into confirmed reminders, tasks, and events. Rule-based parsing runs first; local Ollama (`llama3.1:8b`) is invoked only when input ambiguity crosses uncertainty thresholds.
-
-Beyond NLP extraction, SignalOS features a production-grade DevSecOps containerization architecture, automated CI/CD security pipelines with Open Policy Agent (OPA) Policy-as-Code gates, and an integrated Model Context Protocol (MCP) server for autonomous failure diagnostics and vulnerability triage.
 
 ---
 
@@ -24,7 +20,7 @@ flowchart TD
         LINT --> L1["Ruff Linter"]
         LINT --> L2["ShellCheck (scripts/*.sh)"]
         LINT --> L3["Pytest Suite (15 Hermetic Tests)"]
-        
+
         LINT --> BUILD["Job 2: Container Build & Security Gates"]
         BUILD --> B1["docker build (signalos:ci)"]
         B1 --> B2["Container Smoke Test (/health)"]
@@ -38,12 +34,12 @@ flowchart TD
     subgraph APP["Application Runtime Architecture"]
         CLIENT["Web Browser / PWA / iPhone Shortcut"] --> WEB["FastAPI Service (appuser non-root :8000)"]
         WEB --> DB[("PostgreSQL 15 (postgres_data)")]
-        WEB -. "Local / Hermetic Fallback" .-> SQLITE[("SQLite (signalos.db)")]
-        WEB -. "Smart AI Fallback" .-> AI["Local Ollama (llama3.1:8b) / AI Bridge"]
+        WEB -. "Uses SQLite when DATABASE_URL is unset" .-> SQLITE[("SQLite (local file)")]
+        WEB -. "Optional AI Fallback" .-> AI["Local Ollama (llama3.1:8b) / AI Bridge"]
     end
 
-    subgraph MCP["Autonomous SDLC Remediation (/mcp-ci-doctor)"]
-        DOC["FastMCP Server (SignalOS-CI-Doctor)"]
+    subgraph MCP["CI Failure Diagnosis & CVE Triage (/mcp-ci-doctor)"]
+        DOC["FastMCP Server (ci_doctor_server.py)"]
         T1["fetch_ci_logs()"] --> DOC
         T2["diagnose_pipeline_failure()"] --> DOC
         T3["triage_vulnerabilities()"] --> DOC
@@ -51,20 +47,19 @@ flowchart TD
     end
 ```
 
-### Key Architectural Standards
-1. **Container Hardening:** Runs as an unprivileged, non-root user (`appuser`, UID/GID isolated) on Debian slim (`python:3.11-slim`) with byte-code disabled (`PYTHONDONTWRITEBYTECODE=1`) and unbuffered logging (`PYTHONUNBUFFERED=1`).
-2. **Deterministic Fallbacks:** The core NLP engine operates completely offline using deterministic regex and intent models, invoking local Ollama (`llama3.1:8b`) only when input ambiguity crosses uncertainty thresholds.
-3. **Database Portability:** Operates against containerized PostgreSQL 15 via synchronous `psycopg` (binary wheels), gracefully degrading to local SQLite for isolated developer execution or testing.
-4. **Policy-as-Code Gate:** Trivy container scans are gated by an Open Policy Agent (`policies/trivy_security.rego`) policy that strictly blocks any build introducing a `CRITICAL` vulnerability with an available patch (`FixedVersion != ""`).
-5. **Autonomous Remediation:** An included standalone MCP server (`/mcp-ci-doctor`) enables AI coding agents to inspect failed CI runs and triage security vulnerabilities over standard I/O (`stdio`).
+### Core Engineering Pillars
+- **Containerization:** Runs as non-root `appuser` on `python:3.11-slim`, layer-cached dependencies, disabled bytecode (`PYTHONDONTWRITEBYTECODE=1`), unbuffered logging (`PYTHONUNBUFFERED=1`), and dynamic `$PORT` binding.
+- **CI/CD Pipeline:** GitHub Actions runner (`ubuntu-24.04`) executing Ruff, ShellCheck, 15 hermetic pytest unit tests (zero network/database dependencies), and a live container smoke test verifying `/health`.
+- **Policy-as-Code Gate:** Trivy container scans evaluated by an Open Policy Agent Rego policy (`policies/trivy_security.rego`) that blocks builds on `CRITICAL` vulnerabilities having an available vendor fix (`FixedVersion != ""`).
+- **MCP Diagnostic Server:** Standalone FastMCP module (`mcp-ci-doctor/ci_doctor_server.py` over `stdio`) providing automated GitHub Actions run inspection, failure diagnosis, and CVE triage for AI coding agents.
 
 ---
 
-## Quickstart & Operations
+## Quickstart & Local Verification
 
 ### 1. One-Command Local Docker Deployment
 
-The repository includes POSIX-compliant automation scripts that validate dependencies, generate secure credentials, and launch the stack:
+The repository includes Bash automation scripts that validate dependencies, generate secure credentials, and launch the stack:
 
 ```bash
 # Verify prerequisites (docker, docker compose v2, python3, git, openssl) and generate .env with random secrets
@@ -83,7 +78,7 @@ docker compose down
 docker compose down -v
 ```
 
-### 2. Running Local Quality & Security Gates
+### 2. Local Quality & Security Gates
 
 Execute all unit tests, linters, shell validations, and security policy checks locally:
 
@@ -113,10 +108,10 @@ Add the following to your `claude_desktop_config.json`:
     "signalos-ci-doctor": {
       "command": "python",
       "args": [
-        "d:/personal_archive/nlp/SignalOS/mcp-ci-doctor/ci_doctor_server.py"
+        "/path/to/SignalOS/mcp-ci-doctor/ci_doctor_server.py"
       ],
       "env": {
-        "GITHUB_TOKEN": "ghp_your_optional_token_for_rate_limits",
+        "GITHUB_TOKEN": "<your-github-token-optional>",
         "OLLAMA_BASE_URL": "http://127.0.0.1:11434"
       }
     }
@@ -128,7 +123,10 @@ See [`mcp-ci-doctor/README.md`](file:///d:/personal_archive/nlp/SignalOS/mcp-ci-
 
 ---
 
-## Why SignalOS
+<details>
+<summary><strong>Why SignalOS & Extraction Examples</strong></summary>
+
+### Why SignalOS
 
 Most reminder apps depend on clean manual entry. Most chatbots answer questions but do not turn noisy input into an action system. SignalOS sits in between:
 
@@ -143,11 +141,10 @@ The core idea is human-in-the-loop automation: AI helps interpret the input, but
 ### Current Status
 
 Implemented:
-
-- FastAPI backend running as unprivileged `appuser`
-- Production Docker containerization and Docker Compose stack (PostgreSQL 15)
-- Vanilla JavaScript frontend with a polished dark UI
-- SQLite persistence (local fallback) & PostgreSQL persistence (hosted/containerized)
+- FastAPI backend running as unprivileged `appuser` on `python:3.11-slim`
+- Containerized Docker and Docker Compose stack (PostgreSQL 15)
+- Vanilla JavaScript frontend with a responsive dark UI
+- Uses SQLite when `DATABASE_URL` is unset, PostgreSQL for hosted/containerized setups
 - Username/password login with per-user data isolation
 - Configurable signup cap with `MAX_USERS`
 - Deterministic NLP extraction for fast offline execution
@@ -210,23 +207,7 @@ The deterministic layer currently handles:
 - priority detection from urgency phrases such as `urgent`, `deadline`, and `MOST IMPORTANT`
 - concise title generation from messy input
 
-## Auth And Data Isolation
-
-SignalOS uses simple first-party authentication:
-
-- username/password signup and login
-- salted PBKDF2 password hashes
-- signed HTTP-only session cookies
-- each reminder and pending candidate belongs to one user
-- optional `MAX_USERS` cap for personal deployments
-- tokenized calendar and webhook URLs are generated per user through `/api/setup`
-- Google Calendar tokens are stored per user when optional Google sync is configured
-
-For a personal deployment, set `MAX_USERS=2` on Render or in `.env` to limit the instance to two accounts. The open-source default allows signups unless the deployer disables or limits them.
-
-## Example Inputs
-
-### Single reminder
+### Example Inputs
 
 #### Single reminder
 ```text
@@ -279,7 +260,33 @@ Expected candidate:
 Bus journey: Delhi to Jaipur - event - 21 Oct 2026, 10:50 PM
 ```
 
-## Running Locally Without Docker
+</details>
+
+---
+
+<details>
+<summary><strong>Authentication & Data Isolation</strong></summary>
+
+SignalOS uses simple first-party authentication:
+
+- username/password signup and login
+- salted PBKDF2 password hashes
+- signed HTTP-only session cookies
+- each reminder and pending candidate belongs to one user
+- optional `MAX_USERS` cap for personal deployments
+- tokenized calendar and webhook URLs are generated per user through `/api/setup`
+- Google Calendar tokens are stored per user when optional Google sync is configured
+
+For a personal deployment, set `MAX_USERS=2` on Render or in `.env` to limit the instance to two accounts. The open-source default allows signups unless the deployer disables or limits them.
+
+</details>
+
+---
+
+<details>
+<summary><strong>Running Without Docker & Local AI Bridge</strong></summary>
+
+### Running Locally Without Docker
 
 Create and activate a virtual environment:
 
@@ -427,80 +434,11 @@ Tradeoffs:
 ### Optional Google Calendar Sync
 When Google OAuth is configured, each user can connect their own Google account. SignalOS then creates, updates, and removes events in that user's primary calendar when reminders change.
 
-Use this when:
-
-- you want faster and more direct calendar updates
-- each SignalOS user should connect their own calendar
-- you are comfortable configuring Google Cloud OAuth
-
-Tradeoffs:
-
-- Google Cloud may require billing verification
-- production OAuth publishing may require a Google consent-screen review depending on distribution
-
-## API Overview
-
-Health probe:
-
-```text
-GET /health
-```
-
-Analyze text:
-
-```text
-POST /api/analyze
-```
-
-Create confirmed reminder:
-
-```text
-POST /api/reminders
-```
-
-List reminders:
-
-```text
-GET /api/reminders
-```
-
-Update reminder status, priority, due date, or progress metadata:
-
-```text
-PATCH /api/reminders/{reminder_id}
-```
-
-Queue phone/webhook capture for confirmation:
-
-```text
-POST /api/webhook/capture
-```
-
-Weekly report:
-
-```text
-GET /api/report/weekly
-```
-
-Calendar feed:
-
-```text
-GET /api/calendar.ics
-```
-
-Google Calendar status:
-
-```text
-GET /api/calendar/status
-```
-
-Connect Google Calendar:
-
-```text
-GET /api/calendar/google/connect
-```
-
-Sync connected user's reminders:
+Setup:
+1. Create a Google Cloud project and enable Google Calendar API.
+2. Create an OAuth client for a web application.
+3. Add redirect URI: `https://your-render-url/api/calendar/google/callback`.
+4. Add client ID, client secret, and redirect URI into environment variables.
 
 ### Phone And Calendar Workflow
 Laptop browser, phone browser, and iPhone Shortcuts can all interact with SignalOS when connected to the same network or hosted deployment.
@@ -552,7 +490,7 @@ The database stores calendar sync metadata fields:
 ```text
 SignalOS/
 |-- server.py                 # FastAPI backend, extraction logic, API routes
-|-- Dockerfile                # Hardened non-root Python 3.11 container
+|-- Dockerfile                # Container definition (non-root python:3.11-slim)
 |-- docker-compose.yml        # Orchestration for web and PostgreSQL 15
 |-- .dockerignore             # Container build context exclusion list
 |-- .env.example              # Environment variables template
@@ -562,7 +500,7 @@ SignalOS/
 |-- requirements-dev.txt      # Development, linting, and testing dependencies
 |-- render.yaml               # Render Blueprint config
 |-- .github/workflows/
-|   `-- ci.yml                # Enterprise DevSecOps CI/CD pipeline
+|   `-- ci.yml                # CI: lint, test, container smoke test, Trivy scan, OPA gate
 |-- scripts/
 |   |-- setup.sh              # Prerequisites validation and secret generation
 |   |-- healthcheck.sh        # Retrying HTTP healthcheck probe
@@ -570,15 +508,13 @@ SignalOS/
 |-- policies/
 |   |-- trivy_security.rego   # OPA policy-as-code vulnerability gate
 |   `-- trivy_security_test.rego # Unit tests for OPA security policies
-|-- mcp-ci-doctor/            # Standalone Model Context Protocol server
+|-- mcp-ci-doctor/            # Standalone Model Context Protocol module
 |   |-- ci_doctor_server.py   # FastMCP server exposing CI diagnosis and triage tools
 |   |-- requirements.txt      # MCP SDK and HTTP client dependencies
 |   `-- README.md             # MCP server setup and IDE integration guide
 |-- tests/
 |   |-- test_signalos.py      # Deterministic NLP parser and health route tests
 |   `-- test_mcp_doctor.py    # Unit tests for MCP CI Doctor tools
-|-- data/
-|   `-- signalos.db           # Local SQLite database (offline fallback)
 |-- static/
 |   |-- index.html            # Main UI
 |   |-- app.js                # Frontend behavior
@@ -586,8 +522,7 @@ SignalOS/
 |   |-- manifest.webmanifest  # PWA metadata
 |   `-- service-worker.js     # PWA shell
 |-- ai_bridge.py              # Optional authenticated bridge to local Ollama
-|-- start_ai_bridge.example.bat # Template for a private local bridge launcher
-`-- PRESENTATION_NOTES.md     # Class/demo notes
+`-- start_ai_bridge.example.bat # Template for a private local bridge launcher
 ```
 
 ### Roadmap
@@ -604,6 +539,4 @@ SignalOS/
 - Add richer Google Calendar settings such as default calendar and reminder lead time
 - Add export/backup tooling for personal data
 
-## Resume Summary
-
-Built SignalOS, a local-first GenAI/NLP action inbox that converts messy text, Hinglish prompts, receipt-like inputs, and multi-line notes into confirmed tasks, reminders, events, and calendar-ready actions using FastAPI, SQLite/Postgres, deterministic NLP extraction, smart Ollama fallback, per-user auth, tokenized webhooks, ICS feeds, optional Google Calendar sync, and a human-in-the-loop confirmation workflow. Engineered production-grade DevSecOps with non-root containers, GitHub Actions CI, Trivy vulnerability scanning, OPA/Rego Policy-as-Code gates, and an integrated FastMCP server for autonomous pipeline diagnostics.
+</details>
