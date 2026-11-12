@@ -9,7 +9,7 @@
 
 SignalOS is a local-first GenAI/NLP action inbox that turns messy real-world text into confirmed reminders, tasks, events, notes, and important dates.
 
-It is designed for the kind of information people actually receive every day: WhatsApp-style messages, Hinglish shorthand, college notices, receipts, deadline reminders, travel details, and multi-line notes. Instead of forcing the user to manually create reminders, SignalOS extracts structured action candidates, asks for confirmation, and saves only what the user approves.
+A local-first NLP action inbox that turns messy text (WhatsApp-style messages, Hinglish shorthand, receipts) into confirmed reminders, tasks, and events. Rule-based parsing runs first; local Ollama (`llama3.1:8b`) is invoked only when input ambiguity crosses uncertainty thresholds.
 
 Beyond NLP extraction, SignalOS features a production-grade DevSecOps containerization architecture, automated CI/CD security pipelines with Open Policy Agent (OPA) Policy-as-Code gates, and an integrated Model Context Protocol (MCP) server for autonomous failure diagnostics and vulnerability triage.
 
@@ -140,9 +140,7 @@ Most reminder apps depend on clean manual entry. Most chatbots answer questions 
 
 The core idea is human-in-the-loop automation: AI helps interpret the input, but the user stays in control.
 
-## Current Status
-
-This repository contains a working MVP.
+### Current Status
 
 Implemented:
 
@@ -152,7 +150,7 @@ Implemented:
 - SQLite persistence (local fallback) & PostgreSQL persistence (hosted/containerized)
 - Username/password login with per-user data isolation
 - Configurable signup cap with `MAX_USERS`
-- Deterministic NLP extraction for reliable fallback
+- Deterministic NLP extraction for fast offline execution
 - Optional local Ollama/Llama extraction and validation
 - Multi-action extraction from a single prompt
 - Hinglish and casual shorthand support
@@ -177,12 +175,11 @@ Implemented:
 - Model Context Protocol (`mcp-ci-doctor`) diagnostic server
 
 Not yet implemented:
-
 - OCR image upload for screenshots
 - Push notifications
 - Subtasks/progress workflow for larger tasks
 
-## Tech Stack
+### Tech Stack
 
 - **Backend:** Python 3.11, FastAPI, Pydantic, Uvicorn
 - **Data:** PostgreSQL 15, SQLite fallback
@@ -193,7 +190,7 @@ Not yet implemented:
 - **Calendar:** Per-user ICS feed, optional Google Calendar OAuth sync
 - **Mobile Bridge:** Local network web app and iPhone Shortcut webhook
 
-## How The Extraction Works
+### How The Extraction Works
 
 SignalOS uses a hybrid extraction approach:
 
@@ -204,13 +201,12 @@ SignalOS uses a hybrid extraction approach:
 5. The user reviews every candidate before saving.
 
 The deterministic layer currently handles:
-
 - text normalization
 - Hinglish shorthand such as `kal`, `aaj`, `padhai`, `exam dena`, and `jana`
 - multi-line and multi-action splitting
 - date and time parsing
 - monthly/yearly/weekly/daily recurrence detection
-- payment, travel, deadline, appointment, and personal-task intent scoring
+- rule-based intent scoring for payments, travel, deadlines, appointments, and personal tasks
 - priority detection from urgency phrases such as `urgent`, `deadline`, and `MOST IMPORTANT`
 - concise title generation from messy input
 
@@ -232,30 +228,25 @@ For a personal deployment, set `MAX_USERS=2` on Render or in `.env` to limit the
 
 ### Single reminder
 
+#### Single reminder
 ```text
 cll me at 9 pm
 ```
-
 Expected candidate:
-
 ```text
 Call me - reminder - today 9:00 PM
 ```
 
-### Recurring date
-
+#### Recurring date
 ```text
 my anniversary is on th 16th of every month
 ```
-
 Expected candidate:
-
 ```text
 Anniversary - important date - monthly on day 16
 ```
 
-### Multiple tasks from one prompt
-
+#### Multiple tasks from one prompt
 ```text
 10 am study for exam
 
@@ -265,9 +256,7 @@ Anniversary - important date - monthly on day 16
 
 also remind me to go to the dentist
 ```
-
 Expected candidates:
-
 ```text
 Study for exam - task - 10:00 AM - medium
 Give exam - task - 2:00 PM - medium
@@ -275,8 +264,7 @@ Call gf - task - 7:00 PM - high
 Go to the dentist - task - no specific time - low
 ```
 
-### Receipt/document-style input
-
+#### Receipt/document-style input
 ```text
 Dear Passenger,
 
@@ -286,9 +274,7 @@ PNR: 2402070,
 Seat No: SU6,
 Boarding: Kashmiri gate metro gate no.3 At 10:50 PM
 ```
-
 Expected candidate:
-
 ```text
 Bus journey: Delhi to Jaipur - event - 21 Oct 2026, 10:50 PM
 ```
@@ -311,24 +297,16 @@ pip install -r requirements.txt -r requirements-dev.txt
 Start the app:
 
 ```powershell
-python -m uvicorn server:app --reload --host 0.0.0.0 --port 8001
+python -m uvicorn server:app --reload --host 0.0.0.0 --port 8000
 ```
 
-Open on laptop:
+> **Note:** Port 8000 matches the containerized default. If running alongside Docker Compose, change to `--port 8001` or pass `$PORT`.
 
-```text
-http://127.0.0.1:8001
-```
+Open on laptop: `http://127.0.0.1:8000`
 
-For local phone testing on the same Wi-Fi, open `http://YOUR-LAPTOP-LAN-IP:8001` on the phone while the local server is running.
+### Optional Local AI Setup
 
-For hosted use, open the Render URL from phone or laptop. The app stores data in the configured central database, so both devices see the same reminders after signing into the same SignalOS account.
-
-## Optional Local AI Setup
-
-SignalOS works without Ollama using deterministic extraction.
-
-For local GenAI extraction while running the app on the same laptop:
+SignalOS works without Ollama using deterministic extraction. For local GenAI extraction on the same machine:
 
 ```powershell
 ollama pull llama3.1:8b
@@ -337,46 +315,34 @@ ollama serve
 
 When Ollama is running, SignalOS uses it only when deterministic extraction looks uncertain or complex. Clear prompts stay fast with rules only. If Ollama is unavailable or times out, the app falls back to rules.
 
-## Optional AI Bridge For Hosted App
+### Optional AI Bridge For Hosted App
 
 The hosted Render app cannot directly access Ollama running on your laptop unless the laptop exposes a small authenticated bridge.
 
 The bridge behavior is:
-
 - laptop on + bridge tunnel online: hosted SignalOS can use local Ollama for AI review
 - laptop off or tunnel offline: hosted SignalOS stays online and falls back to deterministic rules
 - no AI token cost: Ollama runs locally on your laptop
 - bridge is protected with `AI_BRIDGE_TOKEN`
 
 On your laptop, start Ollama:
-
 ```powershell
 ollama serve
 ```
 
 Create a private bridge config:
-
 ```powershell
 copy .env.bridge.example .env.bridge.local
 ```
 
 Edit `.env.bridge.local` and replace `AI_BRIDGE_TOKEN` with a private random token of at least 32 characters. This file is ignored by Git.
 
-Then double-click:
-
-```text
-start_ai_bridge.bat
-```
-
-`start_ai_bridge.bat` is intentionally ignored by Git so your personal startup flow stays private. GitHub includes `start_ai_bridge.example.bat` as the template for other users.
-
-Or run the same bridge manually:
-
+Run the bridge:
 ```powershell
 python -m uvicorn ai_bridge:app --host 127.0.0.1 --port 8787
 ```
 
-Expose port `8787` with a secure tunnel such as Cloudflare Tunnel, Tailscale Funnel, or ngrok. Then set these environment variables on Render:
+Expose port `8787` with a secure tunnel (Cloudflare Tunnel, Tailscale Funnel, or ngrok). Then set these environment variables on Render:
 
 ```text
 AI_BRIDGE_URL=https://your-tunnel-url
@@ -384,10 +350,7 @@ AI_BRIDGE_TOKEN=the-same-long-random-secret
 OLLAMA_MODEL=llama3.1:8b
 ```
 
-The SignalOS UI shows `AI bridge online` when the bridge is reachable. If it shows `AI offline, rules active`, reminders still work with deterministic extraction.
-
 Bridge safety checklist:
-
 - use HTTPS tunnel URLs only
 - keep `ai_bridge.py` bound to `127.0.0.1`
 - never expose Ollama port `11434` directly
@@ -397,18 +360,19 @@ Bridge safety checklist:
 - stop the bridge when you do not want the hosted app to use laptop AI
 - leave deterministic rules enabled so the hosted app works when the bridge is offline
 
-Optional bridge limit:
-
+Optional bridge rate limit:
 ```text
 AI_BRIDGE_RATE_LIMIT=30
 ```
 
-This limits bridge calls per client per minute before the request reaches Ollama.
+</details>
 
-## Free Long-Term Deployment
+---
+
+<details>
+<summary><strong>Free Long-Term Cloud Deployment (Render + Neon)</strong></summary>
 
 The recommended no-spend deployment path for personal use is:
-
 - Render Free web service for the FastAPI app
 - Neon Free Postgres for persistent online storage
 - deterministic extraction online
@@ -416,28 +380,23 @@ The recommended no-spend deployment path for personal use is:
 
 This avoids Render's expiring free Postgres database. The app still uses local SQLite when `DATABASE_URL` is not set.
 
-Steps:
-
+### Steps:
 1. Create a free Neon project.
 2. Copy the pooled Postgres connection string from Neon.
 3. Push the latest SignalOS code to GitHub.
 4. Open Render and create a new Blueprint from the SignalOS repository.
 5. Render will read `render.yaml` and create the web service.
-6. In Render, set the `DATABASE_URL` environment variable to the Neon connection string.
+6. In Render, set `DATABASE_URL` to the Neon connection string.
 7. Set `SESSION_SECRET` to a long random value.
 8. Optionally set `MAX_USERS=2` for a personal two-user deployment.
 9. Deploy, then open the public Render URL.
 
-Important free-tier limits:
-
-- Render Free web services can sleep after inactivity, so the first request may take about a minute
-- Neon Free compute can suspend after inactivity, so the first database query may also have a short cold start
-- Neon Free storage persists within its free limits, but the app should still be exported/backed up if it becomes important
-- hosted deployment only uses your laptop's local Ollama when `AI_BRIDGE_URL` is reachable
-- the open-source default allows signups; set `MAX_USERS` to cap accounts on your own deployment
+### Free-Tier Limits & Considerations:
+- Render Free web services sleep after inactivity; initial requests take ~60s.
+- Neon Free compute suspends after inactivity; initial queries have a short cold start.
+- Neon Free storage persists within free limits.
 
 Useful environment variables:
-
 ```text
 DATABASE_URL=postgresql://...
 SESSION_SECRET=long-random-secret
@@ -451,45 +410,21 @@ GOOGLE_CLIENT_SECRET=google-oauth-client-secret
 GOOGLE_REDIRECT_URI=https://your-render-url/api/calendar/google/callback
 ```
 
-## Google Calendar OAuth Setup
+</details>
 
-To enable user-oriented Google Calendar sync:
+---
 
-1. Create a Google Cloud project.
-2. Enable the Google Calendar API.
-3. Create an OAuth client for a web application.
-4. Add this authorized redirect URI:
-
-```text
-https://your-render-url/api/calendar/google/callback
-```
-
-5. Put the client ID, client secret, and redirect URI into Render environment variables.
-
-Each SignalOS user connects their own Google account from the Calendar button in the app. SignalOS uses the `https://www.googleapis.com/auth/calendar.events` scope so it can create, update, and delete events for that connected user.
-
-## Calendar Options
-
-SignalOS is calendar-ready in two ways:
+<details>
+<summary><strong>Calendar Integrations (ICS Feed & Google Calendar OAuth)</strong></summary>
 
 ### Free ICS Feed
-
 Every user has a private `.ics` feed URL protected by that user's API token. Calendar apps can subscribe to this URL without Google Cloud, OAuth, or billing.
 
-Use this when:
-
-- you want the no-spend MVP path
-- you only need SignalOS reminders to appear in a calendar
-- slower calendar refresh is acceptable
-
 Tradeoffs:
-
-- refresh timing is controlled by the calendar app
-- it is mostly one-way sync from SignalOS to calendar
-- Google Calendar may refresh subscribed feeds slowly
+- refresh timing is controlled by the external calendar client
+- one-way sync from SignalOS to the calendar
 
 ### Optional Google Calendar Sync
-
 When Google OAuth is configured, each user can connect their own Google account. SignalOS then creates, updates, and removes events in that user's primary calendar when reminders change.
 
 Use this when:
@@ -567,21 +502,8 @@ GET /api/calendar/google/connect
 
 Sync connected user's reminders:
 
-```text
-POST /api/calendar/google/sync
-```
-
-Setup URLs for phone, webhook, and calendar:
-
-```text
-GET /api/setup
-```
-
-## Phone And Calendar Workflow
-
-For the MVP, the laptop runs the SignalOS server and owns the central SQLite database. Laptop browser, phone browser, and iPhone Shortcuts can all talk to the same local server when they are on the same network.
-
-The calendar layer supports both an ICS fallback and per-user Google Calendar OAuth:
+### Phone And Calendar Workflow
+Laptop browser, phone browser, and iPhone Shortcuts can all interact with SignalOS when connected to the same network or hosted deployment.
 
 - confirmed reminders are exposed through a per-user `/api/calendar.ics?token=...` feed
 - the feed can be subscribed to from calendar apps
@@ -590,14 +512,42 @@ The calendar layer supports both an ICS fallback and per-user Google Calendar OA
 - completing or deleting a reminder removes the linked Google Calendar event when possible
 - Google credentials are stored per user and are not shared between accounts
 
-The database includes calendar sync metadata fields:
-
+The database stores calendar sync metadata fields:
 - `calendar_provider`
 - `calendar_event_id`
 - `calendar_synced_at`
 - `calendar_sync_status`
 
-## Project Structure
+</details>
+
+---
+
+<details>
+<summary><strong>API Reference</strong></summary>
+
+| Endpoint | Method | Description |
+| :--- | :--- | :--- |
+| `/health` | `GET` | Health probe returning `{"status": "ok"}` without auth |
+| `/api/analyze` | `POST` | Analyze messy text and generate candidate actions |
+| `/api/reminders` | `POST` | Save a confirmed reminder/task/event |
+| `/api/reminders` | `GET` | List confirmed reminders for the authenticated user |
+| `/api/reminders/{reminder_id}` | `PATCH` | Update status, priority, due date, or progress metadata |
+| `/api/webhook/capture` | `POST` | Queue mobile/webhook input for review in confirmation inbox |
+| `/api/report/weekly` | `GET` | Retrieve weekly statistics (completed, pending, overdue, completion rate) |
+| `/api/calendar.ics` | `GET` | Export tokenized iCalendar feed |
+| `/api/calendar/status` | `GET` | Query Google Calendar connection status |
+| `/api/calendar/google/connect` | `GET` | Initiate Google OAuth authorization flow |
+| `/api/calendar/google/sync` | `POST` | Sync reminders to connected Google Calendar |
+| `/api/setup` | `GET` | Retrieve setup URLs for mobile webhook and calendar feed |
+
+</details>
+
+---
+
+<details>
+<summary><strong>Project Structure & Roadmap</strong></summary>
+
+### Project Structure
 
 ```text
 SignalOS/
@@ -640,20 +590,17 @@ SignalOS/
 `-- PRESENTATION_NOTES.md     # Class/demo notes
 ```
 
-## Roadmap
+### Roadmap
 
-Near-term:
-
+**Near-term:**
 - Add OCR for screenshot/image uploads
 - Add settings for default reminder time and notification method
 - Improve phone shortcut and ICS subscription documentation
 - Add UI for copying private webhook and ICS URLs from settings
 
-Later:
-
+**Later:**
 - Add PWA push notifications
 - Add subtasks for multi-step work
-- Bring back progress bars after the presentation MVP
 - Add richer Google Calendar settings such as default calendar and reminder lead time
 - Add export/backup tooling for personal data
 
