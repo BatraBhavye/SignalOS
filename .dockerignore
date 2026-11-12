@@ -1,0 +1,40 @@
+# Version control
+.git
+.gitignore
+.gitattributes
+
+# Python bytecode and caches
+__pycache__
+*.py[cod]
+*$py.class
+.pytest_cache
+.coverage
+htmlcov/
+
+# Virtual environments
+venv/
+.venv/
+env/
+ENV/
+
+# Secrets and environment configurations
+.env
+.env.*
+!.env.example
+
+# Local SQLite databases and persistent runtime data
+*.db
+*.sqlite
+*.sqlite3
+data/*.db
+
+# Node / frontend build artifacts
+node_modules/
+
+# Local temporary files, test outputs, and presentation archives
+tmp/
+Bhavye_Batra/
+*.zip
+*.pptx
+*.pdf
+
