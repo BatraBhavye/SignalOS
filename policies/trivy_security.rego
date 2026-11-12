@@ -18,17 +18,20 @@ default allow := false
 # Allow deployment when no actionable critical vulnerabilities exist
 allow if count(deny) == 0
 
-# Deny and generate descriptive message for each actionable critical vulnerability
+# Deny and generate descriptive message for each actionable critical vulnerability.
+# Uses object.get to safely handle clean targets without Vulnerabilities
+# and findings where FixedVersion is omitted by Trivy.
 deny contains msg if {
-    some result in input.Results
-    some vuln in result.Vulnerabilities
+    some result in object.get(input, "Results", [])
+    some vuln in object.get(result, "Vulnerabilities", [])
 
     vuln.Severity == "CRITICAL"
-    is_string(vuln.FixedVersion)
-    vuln.FixedVersion != ""
+    fixed := object.get(vuln, "FixedVersion", "")
+    is_string(fixed)
+    fixed != ""
 
     msg := sprintf(
         "Actionable CRITICAL vulnerability in '%v' (%v): fixed in version '%v' (Installed: '%v')",
-        [vuln.PkgName, vuln.VulnerabilityID, vuln.FixedVersion, vuln.InstalledVersion],
+        [vuln.PkgName, vuln.VulnerabilityID, fixed, vuln.InstalledVersion],
     )
 }

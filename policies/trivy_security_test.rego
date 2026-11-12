@@ -28,19 +28,24 @@ test_deny_actionable_critical_cve if {
     not security.allow with input as mock_report
 }
 
-# Test 2: Clean report, unfixable CRITICAL, or fixable HIGH CVE must not be denied
+# Test 2: Clean report, omitted Vulnerabilities key, and omitted FixedVersion must not deny
 test_allow_clean_or_unfixable_report if {
     mock_report := {
         "Results": [
+            # Target with NO Vulnerabilities key (typical Trivy clean target output)
             {
-                "Target": "signalos:ci (debian 12.8)",
+                "Target": "clean-base-layer (debian 12.8)",
+            },
+            # Target with CRITICAL finding having NO FixedVersion key and a fixable HIGH finding
+            {
+                "Target": "app-layer (python:3.11-slim)",
                 "Vulnerabilities": [
                     {
                         "VulnerabilityID": "CVE-2023-1111",
                         "PkgName": "linux-base",
                         "InstalledVersion": "4.5",
-                        "FixedVersion": "",
                         "Severity": "CRITICAL",
+                        # Notice: FixedVersion key is completely omitted
                     },
                     {
                         "VulnerabilityID": "CVE-2023-2222",
@@ -58,4 +63,14 @@ test_allow_clean_or_unfixable_report if {
     count(denials) == 0
 
     security.allow with input as mock_report
+}
+
+# Test 3: Completely empty input report must safely evaluate to allow
+test_allow_empty_report if {
+    empty_report := {}
+
+    denials := security.deny with input as empty_report
+    count(denials) == 0
+
+    security.allow with input as empty_report
 }

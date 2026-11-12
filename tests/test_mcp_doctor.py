@@ -5,8 +5,8 @@ import json
 from pathlib import Path
 from unittest.mock import MagicMock
 
-# Import mcp-ci-doctor/server.py without namespace collisions
-MCP_SERVER_PATH = Path(__file__).resolve().parent.parent / "mcp-ci-doctor" / "server.py"
+# Import mcp-ci-doctor/ci_doctor_server.py without namespace collisions
+MCP_SERVER_PATH = Path(__file__).resolve().parent.parent / "mcp-ci-doctor" / "ci_doctor_server.py"
 spec = importlib.util.spec_from_file_location("mcp_ci_doctor_server", MCP_SERVER_PATH)
 if spec is None or spec.loader is None:
     raise ImportError(f"Cannot load MCP doctor server from {MCP_SERVER_PATH}")

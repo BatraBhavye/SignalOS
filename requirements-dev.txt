@@ -1,7 +1,4 @@
 pytest
 httpx
 ruff
-mcp[cli]>=1.2.0,<2.0.0
-
-
 -r mcp-ci-doctor/requirements.txt

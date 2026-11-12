@@ -50,7 +50,7 @@ pip install -r mcp-ci-doctor/requirements.txt
 ### Step 2: Test Server via CLI
 You can test the server locally using the MCP CLI inspector or by running the script directly:
 ```bash
-python mcp-ci-doctor/server.py
+python mcp-ci-doctor/ci_doctor_server.py
 ```
 
 ---
@@ -69,7 +69,7 @@ Add the following configuration to:
     "signalos-ci-doctor": {
       "command": "python",
       "args": [
-        "d:/personal_archive/nlp/SignalOS/mcp-ci-doctor/server.py"
+        "d:/personal_archive/nlp/SignalOS/mcp-ci-doctor/ci_doctor_server.py"
       ],
       "env": {
         "GITHUB_TOKEN": "ghp_optional_token_for_rate_limits",
@@ -88,7 +88,7 @@ Add the following configuration to:
       "type": "stdio",
       "command": "python",
       "args": [
-        "mcp-ci-doctor/server.py"
+        "mcp-ci-doctor/ci_doctor_server.py"
       ],
       "env": {
         "PYTHONUNBUFFERED": "1"
